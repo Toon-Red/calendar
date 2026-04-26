@@ -4,7 +4,7 @@ project_id: calendar
 updated: 2026-04-25 23:10
 ---
 
-# Calendar
+# Dream Calendar
 
 > 🔶 **Alpha**  ·  stage: `source testing`  ·  branch: `master`
 

@@ -1,4 +1,4 @@
-"""Calendar — multi-calendar schedule storage and event API.
+"""Dream Calendar — multi-calendar schedule storage and event API.
 
 Calendars: personal (one), project-{id} (auto-created from Pipeline Dashboard),
 custom-{uuid} (user-created).
@@ -40,7 +40,7 @@ DEFAULT_PALETTE = [
     "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16",
 ]
 
-app = FastAPI(title="Calendar", version="0.2.0")
+app = FastAPI(title="Dream Calendar", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
