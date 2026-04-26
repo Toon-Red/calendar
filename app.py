@@ -198,11 +198,64 @@ def _on_startup():
     _bootstrap()
 
 
-# ── Routes: health ───────────────────────────────────────────────────────────
+# ── Routes: health + root landing ────────────────────────────────────────────
 
 @app.get("/api/health")
 def health():
     return {"status": "ok", "version": "0.2.0"}
+
+
+@app.get("/")
+def root():
+    """Landing page for the launcher BrowserView.
+
+    Shows a small status panel + counts and links to the API docs.
+    Without this the launcher tab loads `/` and gets a generic
+    `{"detail":"Not Found"}` instead of a useful page.
+    """
+    from fastapi.responses import HTMLResponse
+    cals = _load_calendars()
+    events = _load_events()
+    today_iso = _today_iso()
+    today_events = [e for e in events if (e.get("start") or "")[:10] == today_iso]
+    rows = "".join(
+        f"<tr><td>{c.get('id')}</td><td>{c.get('name')}</td><td>{c.get('type')}</td></tr>"
+        for c in cals
+    )
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Dream Calendar</title>
+<style>
+body{{font-family:-apple-system,Segoe UI,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:24px}}
+h1{{color:#93c5fd;margin:0 0 4px}}
+.sub{{color:#64748b;font-size:13px;margin-bottom:24px}}
+.stats{{display:flex;gap:16px;margin-bottom:24px}}
+.stat{{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:14px 18px;flex:1}}
+.stat .num{{font-size:28px;font-weight:700;color:#60a5fa}}
+.stat .label{{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-top:4px}}
+table{{width:100%;border-collapse:collapse;background:#1e293b;border:1px solid #334155;border-radius:8px;overflow:hidden}}
+th,td{{padding:10px 14px;text-align:left;border-bottom:1px solid #334155;font-size:13px}}
+th{{background:#0f172a;color:#94a3b8;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em}}
+tr:last-child td{{border-bottom:none}}
+.links{{margin-top:24px;display:flex;gap:12px}}
+a{{color:#60a5fa;text-decoration:none;border:1px solid #334155;padding:6px 12px;border-radius:6px}}
+a:hover{{background:#1e293b}}
+</style></head>
+<body>
+<h1>📅 Dream Calendar</h1>
+<div class="sub">Multi-calendar schedule storage and event API · v0.2.0</div>
+<div class="stats">
+  <div class="stat"><div class="num">{len(cals)}</div><div class="label">Calendars</div></div>
+  <div class="stat"><div class="num">{len(events)}</div><div class="label">Total events</div></div>
+  <div class="stat"><div class="num">{len(today_events)}</div><div class="label">Today</div></div>
+</div>
+<table><thead><tr><th>ID</th><th>Name</th><th>Type</th></tr></thead><tbody>{rows}</tbody></table>
+<div class="links">
+  <a href="/docs">API docs</a>
+  <a href="/api/events">Events JSON</a>
+  <a href="/api/health">Health</a>
+</div>
+</body></html>"""
+    return HTMLResponse(html)
 
 
 # ── Routes: calendars ────────────────────────────────────────────────────────
