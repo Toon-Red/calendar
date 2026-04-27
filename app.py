@@ -86,6 +86,78 @@ def _save_events(events: list[dict]) -> None:
         _atomic_write(EVENTS_FILE, events)
 
 
+# ── Pruning ──────────────────────────────────────────────────────────────────
+# The event store grows unbounded — every EOD seed adds ~20 events for the
+# next day, completed-task notifications pile up, etc. Daily seeding without
+# pruning hit 3963 events in the wild (PD task 08d65305). We keep:
+#   * everything dated within the last `keep_days` (default 30) — recent
+#     history is useful for standup/EOD lookups.
+#   * everything in the future or undated — never prune scheduled work.
+#   * everything not in a terminal status (anything except completed /
+#     cancelled) — only fully-resolved past events are pruning candidates.
+# Pruned events move to a sibling `events_archive.jsonl` file (append-only)
+# so a one-shot `python -m calendar.compact` script (or a future archive
+# endpoint) can resurrect history if the user really needs it.
+
+EVENTS_ARCHIVE = DATA_DIR / "events_archive.jsonl"
+
+
+def prune_old_completed_events(keep_days: int = 30,
+                                today: Optional[date] = None) -> dict:
+    """Move completed/cancelled events older than ``keep_days`` to archive.
+
+    Returns ``{kept, archived, errors}``. Idempotent: re-running with the
+    same cutoff is a no-op once the threshold has been swept.
+    """
+    today = today or date.today()
+    from datetime import timedelta
+    cutoff = today - timedelta(days=keep_days)
+    events = _load_events()
+    keep: list[dict] = []
+    to_archive: list[dict] = []
+    for e in events:
+        # Never prune undated, future, or non-terminal events.
+        start = (e.get("start") or "")
+        date_only = start[:10] if start else None
+        terminal = e.get("status") in ("completed", "cancelled")
+        if not date_only or not terminal:
+            keep.append(e)
+            continue
+        try:
+            ev_date = date.fromisoformat(date_only)
+        except ValueError:
+            keep.append(e)
+            continue
+        if ev_date < cutoff:
+            to_archive.append(e)
+        else:
+            keep.append(e)
+    if not to_archive:
+        return {"kept": len(keep), "archived": 0, "errors": 0}
+    # Append to archive jsonl (one event per line) before saving the new
+    # truncated event store. If the archive write fails, abort: better to
+    # keep events than lose them silently.
+    EVENTS_ARCHIVE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(EVENTS_ARCHIVE, "a", encoding="utf-8") as f:
+            for e in to_archive:
+                f.write(json.dumps(e, default=str) + "\n")
+    except Exception as exc:
+        log.error("calendar prune: archive write failed (%s); aborting prune", exc)
+        return {"kept": len(events), "archived": 0,
+                "errors": 1, "error": str(exc)}
+    _save_events(keep)
+    log.info("calendar prune: archived %d, kept %d (cutoff=%s)",
+             len(to_archive), len(keep), cutoff.isoformat())
+    return {"kept": len(keep), "archived": len(to_archive), "errors": 0}
+
+
+@app.post("/api/events/prune")
+def events_prune(keep_days: int = 30):
+    """Trigger the prune+archive pass. Default keep_days=30."""
+    return prune_old_completed_events(keep_days=keep_days)
+
+
 # ── Models ───────────────────────────────────────────────────────────────────
 
 class CalendarCreate(BaseModel):
@@ -352,23 +424,20 @@ def create_calendar_event(cal_id: str, body: EventCreate):
 
 # ── Routes: events (cross-calendar) ──────────────────────────────────────────
 
-@app.get("/api/events")
-def list_events(
+def _filter_events(
     date: Optional[str] = None,
-    from_date: Optional[str] = Query(None, alias="from"),
+    from_date: Optional[str] = None,
     to: Optional[str] = None,
     project_id: Optional[str] = None,
     source: Optional[str] = None,
     calendar_id: Optional[str] = None,
-):
-    """Cross-calendar event search.
+) -> list[dict]:
+    """Plain helper that does the cross-calendar event search.
 
-    Query params:
-      date=YYYY-MM-DD          single-day match
-      from=DATE&to=DATE        inclusive range
-      project_id=X             events for any calendar tied to that project
-      source=pipeline-dashboard|dream|manual
-      calendar_id=X            scope to one calendar
+    Separated from the FastAPI route so internal callers (e.g.
+    /api/events/today) can invoke it without the Query() defaults
+    binding as Query objects instead of None — that crash was
+    PD task 73863fa1.
     """
     events = _load_events()
     if calendar_id:
@@ -387,9 +456,33 @@ def list_events(
     return events
 
 
+@app.get("/api/events")
+def list_events(
+    date: Optional[str] = None,
+    from_date: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = None,
+    project_id: Optional[str] = None,
+    source: Optional[str] = None,
+    calendar_id: Optional[str] = None,
+):
+    """Cross-calendar event search.
+
+    Query params:
+      date=YYYY-MM-DD          single-day match
+      from=DATE&to=DATE        inclusive range
+      project_id=X             events for any calendar tied to that project
+      source=pipeline-dashboard|dream|manual
+      calendar_id=X            scope to one calendar
+    """
+    return _filter_events(
+        date=date, from_date=from_date, to=to,
+        project_id=project_id, source=source, calendar_id=calendar_id,
+    )
+
+
 @app.get("/api/events/today")
 def events_today():
-    return list_events(date=_today_iso())
+    return _filter_events(date=_today_iso())
 
 
 @app.get("/api/events/{event_id}")
