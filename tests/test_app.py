@@ -324,8 +324,9 @@ def test_prune_archives_completed_events_older_than_keep_days(monkeypatch, tmp_p
     saved = []
     monkeypatch.setattr(cal_app, "_load_events", lambda: list(events))
     monkeypatch.setattr(cal_app, "_save_events", lambda kept: saved.append(list(kept)))
-    archive_path = tmp_path / "events_archive.jsonl"
-    monkeypatch.setattr(cal_app, "EVENTS_ARCHIVE", archive_path)
+    # EVENTS_ARCHIVE already redirected to tmp_path by conftest._isolate_storage;
+    # use that path for assertions.
+    archive_path = cal_app.EVENTS_ARCHIVE
 
     out = cal_app.prune_old_completed_events(keep_days=30, today=today)
 
@@ -344,7 +345,7 @@ def test_prune_archives_completed_events_older_than_keep_days(monkeypatch, tmp_p
     assert archived_ids == {"old-done", "old-cancel"}
 
 
-def test_prune_is_noop_when_no_events_qualify(monkeypatch, tmp_path):
+def test_prune_is_noop_when_no_events_qualify(monkeypatch):
     """Running prune twice must be a no-op the second time."""
     import app as cal_app
     monkeypatch.setattr(cal_app, "_load_events", lambda: [
@@ -353,7 +354,7 @@ def test_prune_is_noop_when_no_events_qualify(monkeypatch, tmp_path):
     save_calls: list = []
     monkeypatch.setattr(cal_app, "_save_events",
                          lambda kept: save_calls.append(list(kept)))
-    monkeypatch.setattr(cal_app, "EVENTS_ARCHIVE", tmp_path / "events_archive.jsonl")
+    # EVENTS_ARCHIVE already redirected by conftest._isolate_storage
     out = cal_app.prune_old_completed_events(keep_days=30)
     assert out["archived"] == 0
     assert out["kept"] == 1
@@ -369,3 +370,45 @@ def test_prune_endpoint_returns_summary():
     body = resp.json()
     assert "kept" in body and "archived" in body
     assert body["archived"] == 0
+
+
+# ── Test isolation ────────────────────────────────────────────────────────────
+
+def test_storage_isolation_no_writes_to_live_store():
+    """Verify the conftest._isolate_storage fixture is working: POSTing an
+    event via the TestClient must NOT create entries in the live
+    data/events.json.  This is the regression guard for the 752-event
+    pollution incident (PD task)."""
+    from pathlib import Path
+    import json
+    import app as cal_app
+
+    live_events_file = Path(__file__).resolve().parent.parent / "data" / "events.json"
+    before = set()
+    if live_events_file.exists():
+        before = {e["id"] for e in json.loads(live_events_file.read_text(encoding="utf-8"))}
+
+    # Write an event through the TestClient — should hit temp storage only.
+    resp = client.post("/api/calendars/personal/events", json={
+        "title": "isolation-probe",
+        "start": "2099-12-31T00:00:00",
+        "source": "dream",
+    })
+    assert resp.status_code == 201
+    probe_id = resp.json()["id"]
+
+    # The probe must NOT appear in the live file.
+    after = set()
+    if live_events_file.exists():
+        after = {e["id"] for e in json.loads(live_events_file.read_text(encoding="utf-8"))}
+    assert probe_id not in after, (
+        f"Event {probe_id} leaked into live events.json — "
+        "conftest._isolate_storage fixture is not working"
+    )
+
+    # Confirm the probe IS visible through the app (temp storage).
+    resp = client.get(f"/api/events/{probe_id}")
+    assert resp.status_code == 200
+
+    # Confirm the live file wasn't modified at all.
+    assert before == after, "Live events.json was modified during test"
