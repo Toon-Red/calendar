@@ -112,6 +112,130 @@ def test_get_event_not_found():
 
 # ── Pruning (PD task 08d65305) ──────────────────────────────────────────────
 
+# ── Timeline (per-project velocity view) ───────────────────────────────────
+
+
+def test_timeline_returns_by_week_structure(monkeypatch):
+    """GET /api/calendars/{cal_id}/timeline returns {by_week: [...]} with the
+    correct per-week shape: week_start, scheduled, completed, cancelled, events."""
+    from datetime import date, timedelta
+    import app as cal_app
+
+    today = date.today()
+    mon = today - timedelta(days=today.weekday())  # Monday of this week
+    fake_events = [
+        {"id": "a", "title": "Task A", "start": today.isoformat(),
+         "status": "scheduled", "calendar_id": "project-dream"},
+        {"id": "b", "title": "Task B", "start": today.isoformat(),
+         "status": "completed", "calendar_id": "project-dream"},
+        {"id": "c", "title": "Task C", "start": today.isoformat(),
+         "status": "cancelled", "calendar_id": "project-dream"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+    monkeypatch.setattr(cal_app, "_calendar_exists", lambda cid: cid == "project-dream")
+
+    resp = client.get("/api/calendars/project-dream/timeline?days=14")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "by_week" in body
+    assert len(body["by_week"]) >= 1
+
+    week = body["by_week"][0]
+    assert week["week_start"] == mon.isoformat()
+    assert week["scheduled"] == 1
+    assert week["completed"] == 1
+    assert week["cancelled"] == 1
+    assert len(week["events"]) == 3
+
+
+def test_timeline_groups_across_multiple_weeks(monkeypatch):
+    """Events spanning two different ISO weeks should land in separate buckets."""
+    from datetime import date, timedelta
+    import app as cal_app
+
+    today = date.today()
+    next_mon = today + timedelta(days=(7 - today.weekday()))  # Next Monday
+    fake_events = [
+        {"id": "w1", "title": "This week", "start": today.isoformat(),
+         "status": "scheduled", "calendar_id": "project-dream"},
+        {"id": "w2", "title": "Next week", "start": next_mon.isoformat(),
+         "status": "scheduled", "calendar_id": "project-dream"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+    monkeypatch.setattr(cal_app, "_calendar_exists", lambda cid: cid == "project-dream")
+
+    resp = client.get("/api/calendars/project-dream/timeline?days=14")
+    assert resp.status_code == 200
+    weeks = resp.json()["by_week"]
+    assert len(weeks) == 2
+    ids_per_week = [[e["id"] for e in w["events"]] for w in weeks]
+    assert ["w1"] in ids_per_week
+    assert ["w2"] in ids_per_week
+
+
+def test_timeline_empty_when_no_events(monkeypatch):
+    """An empty calendar should return by_week=[]."""
+    import app as cal_app
+    monkeypatch.setattr(cal_app, "_load_events", lambda: [])
+    monkeypatch.setattr(cal_app, "_calendar_exists", lambda cid: cid == "project-dream")
+
+    resp = client.get("/api/calendars/project-dream/timeline")
+    assert resp.status_code == 200
+    assert resp.json() == {"by_week": []}
+
+
+def test_timeline_404_for_missing_calendar():
+    """Timeline on a nonexistent calendar should 404."""
+    resp = client.get("/api/calendars/nonexistent-cal/timeline")
+    assert resp.status_code == 404
+
+
+def test_timeline_excludes_other_calendars(monkeypatch):
+    """Events on a different calendar must not appear in the timeline."""
+    from datetime import date
+    import app as cal_app
+
+    today = date.today()
+    fake_events = [
+        {"id": "mine", "title": "Mine", "start": today.isoformat(),
+         "status": "scheduled", "calendar_id": "project-dream"},
+        {"id": "other", "title": "Other cal", "start": today.isoformat(),
+         "status": "scheduled", "calendar_id": "project-other"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+    monkeypatch.setattr(cal_app, "_calendar_exists", lambda cid: True)
+
+    resp = client.get("/api/calendars/project-dream/timeline?days=7")
+    assert resp.status_code == 200
+    all_ids = [e["id"] for w in resp.json()["by_week"] for e in w["events"]]
+    assert "mine" in all_ids
+    assert "other" not in all_ids
+
+
+def test_timeline_respects_days_param(monkeypatch):
+    """Events beyond the days window must be excluded."""
+    from datetime import date, timedelta
+    import app as cal_app
+
+    today = date.today()
+    fake_events = [
+        {"id": "near", "title": "Soon", "start": (today + timedelta(days=2)).isoformat(),
+         "status": "scheduled", "calendar_id": "project-dream"},
+        {"id": "far", "title": "Far away", "start": (today + timedelta(days=30)).isoformat(),
+         "status": "scheduled", "calendar_id": "project-dream"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+    monkeypatch.setattr(cal_app, "_calendar_exists", lambda cid: cid == "project-dream")
+
+    resp = client.get("/api/calendars/project-dream/timeline?days=7")
+    assert resp.status_code == 200
+    all_ids = [e["id"] for w in resp.json()["by_week"] for e in w["events"]]
+    assert "near" in all_ids
+    assert "far" not in all_ids
+
+
+# ── Pruning (PD task 08d65305) ──────────────────────────────────────────────
+
 def test_prune_archives_completed_events_older_than_keep_days(monkeypatch, tmp_path):
     """prune_old_completed_events() moves completed/cancelled events
     dated outside the keep window into events_archive.jsonl and shrinks

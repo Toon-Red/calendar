@@ -378,6 +378,51 @@ def calendar_events(cal_id: str, from_date: Optional[str] = None, to_date: Optio
     return events
 
 
+@app.get("/api/calendars/{cal_id}/timeline")
+def calendar_timeline(cal_id: str, days: int = 14):
+    """Per-project timeline view: events from today to today + N days,
+    grouped by ISO week with per-status summary counts.
+
+    Returns ``{by_week: [{week_start, scheduled, completed, cancelled, events}]}``.
+    Reuses ``_filter_events()`` for the date-range filtering.
+    """
+    if not _calendar_exists(cal_id):
+        raise HTTPException(404, "Calendar not found")
+
+    today = date.today()
+    end_date = today + timedelta(days=days)
+    events = _filter_events(
+        calendar_id=cal_id,
+        from_date=today.isoformat(),
+        to=end_date.isoformat(),
+    )
+
+    # Bucket events by ISO week (Monday-based).
+    buckets: dict[str, list[dict]] = {}
+    for e in events:
+        try:
+            ev_date = date.fromisoformat(_date_only(e["start"]))
+        except (ValueError, KeyError):
+            continue
+        # Monday of the event's ISO week
+        week_start = ev_date - timedelta(days=ev_date.weekday())
+        key = week_start.isoformat()
+        buckets.setdefault(key, []).append(e)
+
+    by_week = []
+    for week_start in sorted(buckets):
+        week_events = buckets[week_start]
+        by_week.append({
+            "week_start": week_start,
+            "scheduled": sum(1 for e in week_events if e.get("status") == "scheduled"),
+            "completed": sum(1 for e in week_events if e.get("status") == "completed"),
+            "cancelled": sum(1 for e in week_events if e.get("status") == "cancelled"),
+            "events": week_events,
+        })
+
+    return {"by_week": by_week}
+
+
 @app.post("/api/calendars/{cal_id}/events", status_code=201)
 def create_calendar_event(cal_id: str, body: EventCreate):
     """Create an event on the given calendar.
