@@ -16,6 +16,7 @@ import logging
 import os
 import tempfile
 import threading
+import time
 import urllib.request
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -52,12 +53,27 @@ _lock = threading.Lock()
 # ── Storage ──────────────────────────────────────────────────────────────────
 
 def _atomic_write(path: Path, data) -> None:
+    """Write *data* as JSON to *path* atomically (write-to-tmp then rename).
+
+    On Windows ``os.replace`` can transiently fail with ``PermissionError``
+    when a concurrent reader holds the target file open (Python's default
+    ``open()`` does not set ``FILE_SHARE_DELETE``).  Retry a few times with
+    a short back-off so a brief overlapping read doesn't cause a 500.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, default=str)
-        os.replace(tmp, str(path))
+        last_err: Exception | None = None
+        for attempt in range(5):
+            try:
+                os.replace(tmp, str(path))
+                return
+            except PermissionError as exc:
+                last_err = exc
+                time.sleep(0.02 * (attempt + 1))
+        raise last_err  # type: ignore[misc]
     except Exception:
         try: os.unlink(tmp)
         except Exception: pass
@@ -67,7 +83,17 @@ def _atomic_write(path: Path, data) -> None:
 def _load_calendars() -> list[dict]:
     if not CALENDARS_FILE.exists():
         return []
-    return json.loads(CALENDARS_FILE.read_text(encoding="utf-8"))
+    # On Windows the file may briefly be unavailable during an os.replace()
+    # from a concurrent writer.  Retry a few times before giving up.
+    for attempt in range(5):
+        try:
+            return json.loads(CALENDARS_FILE.read_text(encoding="utf-8"))
+        except (PermissionError, FileNotFoundError):
+            if attempt < 4:
+                time.sleep(0.02 * (attempt + 1))
+            else:
+                raise
+    return []  # unreachable — keeps type-checkers happy
 
 
 def _save_calendars(cals: list[dict]) -> None:
@@ -78,7 +104,15 @@ def _save_calendars(cals: list[dict]) -> None:
 def _load_events() -> list[dict]:
     if not EVENTS_FILE.exists():
         return []
-    return json.loads(EVENTS_FILE.read_text(encoding="utf-8"))
+    for attempt in range(5):
+        try:
+            return json.loads(EVENTS_FILE.read_text(encoding="utf-8"))
+        except (PermissionError, FileNotFoundError):
+            if attempt < 4:
+                time.sleep(0.02 * (attempt + 1))
+            else:
+                raise
+    return []  # unreachable — keeps type-checkers happy
 
 
 def _save_events(events: list[dict]) -> None:
@@ -540,36 +574,39 @@ def get_event(event_id: str):
 
 @app.delete("/api/events/{event_id}")
 def delete_event(event_id: str):
-    events = _load_events()
-    remaining = [e for e in events if e["id"] != event_id]
-    if len(remaining) == len(events):
-        raise HTTPException(404, "Event not found")
-    _save_events(remaining)
+    with _lock:
+        events = _load_events()
+        remaining = [e for e in events if e["id"] != event_id]
+        if len(remaining) == len(events):
+            raise HTTPException(404, "Event not found")
+        _atomic_write(EVENTS_FILE, remaining)
     return {"ok": True}
 
 
 @app.post("/api/events/{event_id}/complete")
 def complete_event(event_id: str):
-    events = _load_events()
-    for e in events:
-        if e["id"] == event_id:
-            e["status"] = "completed"
-            e["completed_at"] = _now_iso()
-            e["updated_at"] = _now_iso()
-            _save_events(events)
-            return e
+    with _lock:
+        events = _load_events()
+        for e in events:
+            if e["id"] == event_id:
+                e["status"] = "completed"
+                e["completed_at"] = _now_iso()
+                e["updated_at"] = _now_iso()
+                _atomic_write(EVENTS_FILE, events)
+                return e
     raise HTTPException(404, "Event not found")
 
 
 @app.post("/api/events/{event_id}/cancel")
 def cancel_event(event_id: str):
-    events = _load_events()
-    for e in events:
-        if e["id"] == event_id:
-            e["status"] = "cancelled"
-            e["updated_at"] = _now_iso()
-            _save_events(events)
-            return e
+    with _lock:
+        events = _load_events()
+        for e in events:
+            if e["id"] == event_id:
+                e["status"] = "cancelled"
+                e["updated_at"] = _now_iso()
+                _atomic_write(EVENTS_FILE, events)
+                return e
     raise HTTPException(404, "Event not found")
 
 

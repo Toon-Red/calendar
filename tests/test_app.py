@@ -105,6 +105,42 @@ def test_events_today_returns_only_today(monkeypatch, tmp_path):
     assert ids == ["today1", "today2"]
 
 
+def test_event_create_read_delete():
+    """Full CRUD cycle: create → read → delete → confirm gone.
+
+    Regression for the integration test 'Calendar: create+read+delete event'
+    which hit intermittent 500s due to file-locking races on Windows.
+    """
+    # Create
+    resp = client.post("/api/calendars/personal/events", json={
+        "title": "crud probe",
+        "start": "2030-01-01T09:00:00",
+        "end": "2030-01-01T10:00:00",
+        "all_day": False,
+        "category": "task",
+        "status": "scheduled",
+        "source": "dream",
+    })
+    assert resp.status_code == 201, f"create returned {resp.status_code}: {resp.text}"
+    event = resp.json()
+    eid = event["id"]
+    assert eid, "create response missing id"
+
+    try:
+        # Read
+        resp = client.get(f"/api/events/{eid}")
+        assert resp.status_code == 200, f"read returned {resp.status_code}"
+        assert resp.json()["title"] == "crud probe"
+    finally:
+        # Delete (always clean up)
+        resp = client.delete(f"/api/events/{eid}")
+        assert resp.status_code in (200, 204), f"delete returned {resp.status_code}"
+
+    # Confirm gone
+    resp = client.get(f"/api/events/{eid}")
+    assert resp.status_code == 404
+
+
 def test_get_event_not_found():
     resp = client.get("/api/events/nonexistent-id")
     assert resp.status_code == 404
