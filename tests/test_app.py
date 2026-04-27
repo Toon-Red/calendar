@@ -110,7 +110,11 @@ def test_event_create_read_delete():
 
     Regression for the integration test 'Calendar: create+read+delete event'
     which hit intermittent 500s due to file-locking races on Windows.
+    The delete now returns 503 (not 500) on transient I/O contention and
+    the retry budget has been doubled, so the window is much smaller.
     """
+    import time as _time
+
     # Create
     resp = client.post("/api/calendars/personal/events", json={
         "title": "crud probe",
@@ -132,13 +136,38 @@ def test_event_create_read_delete():
         assert resp.status_code == 200, f"read returned {resp.status_code}"
         assert resp.json()["title"] == "crud probe"
     finally:
-        # Delete (always clean up)
+        # Delete (always clean up — retry once on 503 transient contention)
         resp = client.delete(f"/api/events/{eid}")
-        assert resp.status_code in (200, 204), f"delete returned {resp.status_code}"
+        if resp.status_code == 503:
+            _time.sleep(0.2)
+            resp = client.delete(f"/api/events/{eid}")
+        assert resp.status_code in (200, 204), \
+            f"cleanup delete returned {resp.status_code} (probe event {eid} may leak)"
 
     # Confirm gone
     resp = client.get(f"/api/events/{eid}")
     assert resp.status_code == 404
+
+
+def test_delete_returns_503_on_io_contention(monkeypatch):
+    """When the storage layer exhausts all retries on PermissionError,
+    the endpoint must return 503 (not 500) so callers can distinguish
+    transient I/O contention from a real server bug."""
+    import app as cal_app
+
+    fake_events = [
+        {"id": "doomed", "title": "Doomed", "start": "2030-01-01T09:00:00",
+         "calendar_id": "personal", "status": "scheduled"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+
+    def _boom(*_a, **_kw):
+        raise PermissionError("simulated Windows file lock")
+
+    monkeypatch.setattr(cal_app, "_atomic_write", _boom)
+
+    resp = client.delete("/api/events/doomed")
+    assert resp.status_code == 503, f"expected 503, got {resp.status_code}"
 
 
 def test_get_event_not_found():

@@ -57,8 +57,9 @@ def _atomic_write(path: Path, data) -> None:
 
     On Windows ``os.replace`` can transiently fail with ``PermissionError``
     when a concurrent reader holds the target file open (Python's default
-    ``open()`` does not set ``FILE_SHARE_DELETE``).  Retry a few times with
-    a short back-off so a brief overlapping read doesn't cause a 500.
+    ``open()`` does not set ``FILE_SHARE_DELETE``).  Retry with exponential
+    back-off so brief overlapping reads (or antivirus/indexer scans on large
+    event stores) don't surface as 500s.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
@@ -66,13 +67,13 @@ def _atomic_write(path: Path, data) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, default=str)
         last_err: Exception | None = None
-        for attempt in range(5):
+        for attempt in range(10):
             try:
                 os.replace(tmp, str(path))
                 return
             except PermissionError as exc:
                 last_err = exc
-                time.sleep(0.02 * (attempt + 1))
+                time.sleep(0.05 * (attempt + 1))  # 50-500ms back-off
         raise last_err  # type: ignore[misc]
     except Exception:
         try: os.unlink(tmp)
@@ -85,12 +86,12 @@ def _load_calendars() -> list[dict]:
         return []
     # On Windows the file may briefly be unavailable during an os.replace()
     # from a concurrent writer.  Retry a few times before giving up.
-    for attempt in range(5):
+    for attempt in range(10):
         try:
             return json.loads(CALENDARS_FILE.read_text(encoding="utf-8"))
         except (PermissionError, FileNotFoundError):
-            if attempt < 4:
-                time.sleep(0.02 * (attempt + 1))
+            if attempt < 9:
+                time.sleep(0.05 * (attempt + 1))
             else:
                 raise
     return []  # unreachable — keeps type-checkers happy
@@ -104,12 +105,12 @@ def _save_calendars(cals: list[dict]) -> None:
 def _load_events() -> list[dict]:
     if not EVENTS_FILE.exists():
         return []
-    for attempt in range(5):
+    for attempt in range(10):
         try:
             return json.loads(EVENTS_FILE.read_text(encoding="utf-8"))
         except (PermissionError, FileNotFoundError):
-            if attempt < 4:
-                time.sleep(0.02 * (attempt + 1))
+            if attempt < 9:
+                time.sleep(0.05 * (attempt + 1))
             else:
                 raise
     return []  # unreachable — keeps type-checkers happy
@@ -477,28 +478,32 @@ def create_calendar_event(cal_id: str, body: EventCreate):
 
     # Hold the lock across read+modify+write so concurrent POSTs from Dream's
     # fan-out (goal+deliverable+todo all writing at once) don't lose writes.
-    with _lock:
-        events = _load_events()
+    try:
+        with _lock:
+            events = _load_events()
 
-        if payload["source"] != "manual" and payload.get("source_id"):
-            for e in events:
-                if e.get("source") == payload["source"] and e.get("source_id") == payload["source_id"]:
-                    e.update({k: v for k, v in payload.items() if v is not None or k == "status"})
-                    e["calendar_id"] = cal_id
-                    e["updated_at"] = _now_iso()
-                    _atomic_write(EVENTS_FILE, events)
-                    return e
+            if payload["source"] != "manual" and payload.get("source_id"):
+                for e in events:
+                    if e.get("source") == payload["source"] and e.get("source_id") == payload["source_id"]:
+                        e.update({k: v for k, v in payload.items() if v is not None or k == "status"})
+                        e["calendar_id"] = cal_id
+                        e["updated_at"] = _now_iso()
+                        _atomic_write(EVENTS_FILE, events)
+                        return e
 
-        event = {
-            "id": uuid.uuid4().hex[:8],
-            "calendar_id": cal_id,
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
-            **payload,
-        }
-        events.append(event)
-        _atomic_write(EVENTS_FILE, events)
-        return event
+            event = {
+                "id": uuid.uuid4().hex[:8],
+                "calendar_id": cal_id,
+                "created_at": _now_iso(),
+                "updated_at": _now_iso(),
+                **payload,
+            }
+            events.append(event)
+            _atomic_write(EVENTS_FILE, events)
+            return event
+    except PermissionError:
+        log.error("create_calendar_event(%s): file I/O contention after retries", cal_id)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
 
 
 # ── Routes: events (cross-calendar) ──────────────────────────────────────────
@@ -574,39 +579,57 @@ def get_event(event_id: str):
 
 @app.delete("/api/events/{event_id}")
 def delete_event(event_id: str):
-    with _lock:
-        events = _load_events()
-        remaining = [e for e in events if e["id"] != event_id]
-        if len(remaining) == len(events):
-            raise HTTPException(404, "Event not found")
-        _atomic_write(EVENTS_FILE, remaining)
+    try:
+        with _lock:
+            events = _load_events()
+            remaining = [e for e in events if e["id"] != event_id]
+            if len(remaining) == len(events):
+                raise HTTPException(404, "Event not found")
+            _atomic_write(EVENTS_FILE, remaining)
+    except HTTPException:
+        raise
+    except PermissionError:
+        log.error("delete_event(%s): file I/O contention after retries", event_id)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
     return {"ok": True}
 
 
 @app.post("/api/events/{event_id}/complete")
 def complete_event(event_id: str):
-    with _lock:
-        events = _load_events()
-        for e in events:
-            if e["id"] == event_id:
-                e["status"] = "completed"
-                e["completed_at"] = _now_iso()
-                e["updated_at"] = _now_iso()
-                _atomic_write(EVENTS_FILE, events)
-                return e
+    try:
+        with _lock:
+            events = _load_events()
+            for e in events:
+                if e["id"] == event_id:
+                    e["status"] = "completed"
+                    e["completed_at"] = _now_iso()
+                    e["updated_at"] = _now_iso()
+                    _atomic_write(EVENTS_FILE, events)
+                    return e
+    except HTTPException:
+        raise
+    except PermissionError:
+        log.error("complete_event(%s): file I/O contention after retries", event_id)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
     raise HTTPException(404, "Event not found")
 
 
 @app.post("/api/events/{event_id}/cancel")
 def cancel_event(event_id: str):
-    with _lock:
-        events = _load_events()
-        for e in events:
-            if e["id"] == event_id:
-                e["status"] = "cancelled"
-                e["updated_at"] = _now_iso()
-                _atomic_write(EVENTS_FILE, events)
-                return e
+    try:
+        with _lock:
+            events = _load_events()
+            for e in events:
+                if e["id"] == event_id:
+                    e["status"] = "cancelled"
+                    e["updated_at"] = _now_iso()
+                    _atomic_write(EVENTS_FILE, events)
+                    return e
+    except HTTPException:
+        raise
+    except PermissionError:
+        log.error("cancel_event(%s): file I/O contention after retries", event_id)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
     raise HTTPException(404, "Event not found")
 
 
