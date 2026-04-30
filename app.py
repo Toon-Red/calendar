@@ -11,9 +11,11 @@ Run:
     python app.py --port 5041
 """
 import argparse
+import http.client
 import json
 import logging
 import os
+import socket as _socket
 import tempfile
 import threading
 import time
@@ -42,6 +44,38 @@ DEFAULT_PALETTE = [
     "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6",
     "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16",
 ]
+
+
+# ── SO_REUSEADDR HTTP client ────────────────────────────────────────────────
+# On Windows, rapid loopback connections leave sockets in TIME_WAIT for ~120 s.
+# Using SO_REUSEADDR on outbound connections (e.g. bootstrap → PD) prevents
+# WinError 10048 (WSAEADDRINUSE) from ephemeral-port collisions.
+
+class _ReuseAddrHTTPConnection(http.client.HTTPConnection):
+    """HTTPConnection that sets SO_REUSEADDR before connect()."""
+
+    def connect(self):
+        sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        if self.timeout is not _socket._GLOBAL_DEFAULT_TIMEOUT:
+            sock.settimeout(self.timeout)
+        try:
+            sock.connect((self.host, self.port))
+        except OSError:
+            sock.close()
+            raise
+        self.sock = sock
+
+
+class _ReuseAddrHTTPHandler(urllib.request.HTTPHandler):
+    """urllib handler that uses SO_REUSEADDR-enabled connections."""
+
+    def http_open(self, req):
+        return self.do_open(_ReuseAddrHTTPConnection, req)
+
+
+_reuse_opener = urllib.request.build_opener(_ReuseAddrHTTPHandler)
+
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -294,9 +328,12 @@ def _bootstrap():
     if changed:
         _save_events(events)
 
-    # Project calendars from Pipeline Dashboard (best effort)
+    # Project calendars from Pipeline Dashboard (best effort).
+    # Use _reuse_opener (SO_REUSEADDR) to avoid WinError 10048 when the
+    # system has many TIME_WAIT sockets from other Dream loopback traffic.
     try:
-        with urllib.request.urlopen(f"{PIPELINE_DASHBOARD_URL}/api/projects", timeout=3) as r:
+        req = urllib.request.Request(f"{PIPELINE_DASHBOARD_URL}/api/projects")
+        with _reuse_opener.open(req, timeout=3) as r:
             data = json.loads(r.read())
         projects = data.get("projects", []) if isinstance(data, dict) else data
         for p in projects:
@@ -664,13 +701,47 @@ def project_events(project_id: str, from_date: Optional[str] = None, to_date: Op
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
 
+def _make_server_socket(host: str, port: int) -> _socket.socket:
+    """Create a listening socket with SO_REUSEADDR.
+
+    On Windows, ``asyncio`` does NOT set ``SO_REUSEADDR`` on server sockets
+    (unlike Linux where it's the default).  Without it, restarting the
+    calendar service after a crash fails with ``WinError 10048``
+    (``WSAEADDRINUSE``) because the previous socket lingers in
+    ``TIME_WAIT`` for ~120 s.  Pre-creating the socket with the flag set
+    eliminates this restart window completely.
+
+    For a local-only service bound to ``127.0.0.1`` the security trade-off
+    is negligible — Windows' ``SO_REUSEADDR`` allows address 'hijacking',
+    but only other processes on the same machine can exploit it, and they
+    already have full access to the loopback interface.
+    """
+    sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+    sock.bind((host, port))
+    sock.listen(2048)
+    sock.setblocking(False)
+    return sock
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=5041)
     ap.add_argument("--reload", action="store_true")
     args = ap.parse_args()
-    uvicorn.run("app:app", host=args.host, port=args.port, reload=args.reload)
+
+    if args.reload:
+        # --reload uses subprocess-based file watching; let uvicorn manage
+        # its own sockets so child processes can each bind independently.
+        uvicorn.run("app:app", host=args.host, port=args.port, reload=True)
+    else:
+        # Production path: pre-create socket with SO_REUSEADDR.
+        sock = _make_server_socket(args.host, args.port)
+        log.info("Listening on %s:%d (SO_REUSEADDR enabled)", args.host, args.port)
+        config = uvicorn.Config("app:app")
+        server = uvicorn.Server(config)
+        server.run(sockets=[sock])
 
 
 if __name__ == "__main__":
