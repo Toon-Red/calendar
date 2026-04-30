@@ -19,6 +19,8 @@ import threading
 import time
 import urllib.request
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -41,7 +43,14 @@ DEFAULT_PALETTE = [
     "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16",
 ]
 
-app = FastAPI(title="Dream Calendar", version="0.2.0")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Startup/shutdown lifecycle — replaces the deprecated on_event("startup")."""
+    _bootstrap()
+    yield
+
+
+app = FastAPI(title="Dream Calendar", version="0.2.0", lifespan=_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
@@ -298,11 +307,6 @@ def _bootstrap():
         log.info("Bootstrapped %d project calendars", len(projects))
     except Exception as e:
         log.warning("Could not fetch projects from Pipeline Dashboard: %s", e)
-
-
-@app.on_event("startup")
-def _on_startup():
-    _bootstrap()
 
 
 # ── Routes: health + root landing ────────────────────────────────────────────
