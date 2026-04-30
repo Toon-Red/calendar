@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import socket as _socket
+import struct as _struct
 import tempfile
 import threading
 import time
@@ -46,17 +47,28 @@ DEFAULT_PALETTE = [
 ]
 
 
-# ── SO_REUSEADDR HTTP client ────────────────────────────────────────────────
+# ── SO_REUSEADDR + SO_LINGER HTTP client ─────────────────────────────────────
 # On Windows, rapid loopback connections leave sockets in TIME_WAIT for ~120 s.
-# Using SO_REUSEADDR on outbound connections (e.g. bootstrap → PD) prevents
-# WinError 10048 (WSAEADDRINUSE) from ephemeral-port collisions.
+# SO_REUSEADDR alone is insufficient because the OS only honours it for
+# explicit bind() calls, not the implicit bind during connect().  SO_LINGER
+# with l_linger=0 forces RST on close(), skipping TIME_WAIT entirely and
+# freeing the ephemeral port immediately — safe for loopback traffic where
+# the response is fully read before close() fires.
 
 class _ReuseAddrHTTPConnection(http.client.HTTPConnection):
-    """HTTPConnection that sets SO_REUSEADDR before connect()."""
+    """HTTPConnection that sets SO_REUSEADDR + SO_LINGER before connect().
+
+    SO_LINGER with l_onoff=1, l_linger=0 forces an RST on close(),
+    bypassing TIME_WAIT and immediately freeing the ephemeral port.
+    This eliminates WinError 10048 on rapid loopback connections.
+    """
 
     def connect(self):
         sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
         sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        # Force RST on close → skip TIME_WAIT → free ephemeral port now.
+        sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_LINGER,
+                        _struct.pack('ii', 1, 0))
         if self.timeout is not _socket._GLOBAL_DEFAULT_TIMEOUT:
             sock.settimeout(self.timeout)
         try:
