@@ -205,44 +205,71 @@ def test_create_returns_503_on_calendar_load_failure(monkeypatch):
     assert resp.status_code == 503, f"expected 503, got {resp.status_code}"
 
 
-def test_load_events_graceful_on_corrupt_json(tmp_path):
-    """_load_events() should return [] (not crash) when the file contains
-    corrupted JSON.  This covers the scenario where a reader sees a
-    truncated file during an atomic swap on Windows."""
+def test_load_events_raises_on_corrupt_json(tmp_path, monkeypatch):
+    """_load_events() should raise OSError (not silently return []) when the
+    file contains corrupted JSON and all retries are exhausted.  This ensures
+    callers (e.g. get_event) can distinguish 'no events' from 'storage error'
+    and return 503 instead of a misleading 404."""
     import app as cal_app
 
-    corrupt_file = tmp_path / "events_corrupt.json"
-    corrupt_file.write_text("{truncated", encoding="utf-8")
+    monkeypatch.setattr(cal_app, "EVENTS_FILE", tmp_path / "events_corrupt.json")
+    (tmp_path / "events_corrupt.json").write_text("{truncated", encoding="utf-8")
+    # Speed up retries for the test
+    monkeypatch.setattr("time.sleep", lambda _: None)
 
-    original = cal_app.EVENTS_FILE
-    cal_app.EVENTS_FILE = corrupt_file
-    try:
-        result = cal_app._load_events()
-        assert result == [], f"expected [] for corrupt file, got {result!r}"
-    finally:
-        cal_app.EVENTS_FILE = original
+    import pytest
+    with pytest.raises(OSError, match="temporarily unavailable"):
+        cal_app._load_events()
 
 
-def test_load_events_handles_empty_file(tmp_path):
-    """An empty events file (e.g. from a crash mid-replace) should return []
-    rather than raising JSONDecodeError."""
+def test_load_events_raises_on_empty_file(tmp_path, monkeypatch):
+    """An empty events file (e.g. from a crash mid-replace) should raise
+    OSError after retries, not silently return []."""
     import app as cal_app
 
-    empty_file = tmp_path / "events_empty.json"
-    empty_file.write_text("", encoding="utf-8")
+    monkeypatch.setattr(cal_app, "EVENTS_FILE", tmp_path / "events_empty.json")
+    (tmp_path / "events_empty.json").write_text("", encoding="utf-8")
+    monkeypatch.setattr("time.sleep", lambda _: None)
 
-    original = cal_app.EVENTS_FILE
-    cal_app.EVENTS_FILE = empty_file
-    try:
-        result = cal_app._load_events()
-        assert result == [], f"expected [] for empty file, got {result!r}"
-    finally:
-        cal_app.EVENTS_FILE = original
+    import pytest
+    with pytest.raises(OSError, match="temporarily unavailable"):
+        cal_app._load_events()
 
 
 def test_get_event_not_found():
     resp = client.get("/api/events/nonexistent-id")
     assert resp.status_code == 404
+
+
+def test_get_event_returns_503_on_storage_error(monkeypatch):
+    """Regression: when _load_events() fails (e.g. file locked by antivirus
+    or concurrent atomic swap on Windows), get_event must return 503 (not 404).
+    Returning 404 on a transient storage error caused the Dream EOD integration
+    test 'Calendar: create+read+delete event' to fail — the test created an
+    event, then read it back and got a false 404 because the storage was
+    momentarily unavailable."""
+    import app as cal_app
+
+    def _failing_load():
+        raise OSError("simulated storage unavailable")
+
+    monkeypatch.setattr(cal_app, "_load_events", _failing_load)
+
+    resp = client.get("/api/events/some-id")
+    assert resp.status_code == 503, f"expected 503, got {resp.status_code}"
+
+
+def test_list_events_returns_503_on_storage_error(monkeypatch):
+    """list_events should return 503 when storage is unavailable."""
+    import app as cal_app
+
+    def _failing_load():
+        raise OSError("simulated storage unavailable")
+
+    monkeypatch.setattr(cal_app, "_load_events", _failing_load)
+
+    resp = client.get("/api/events")
+    assert resp.status_code == 503, f"expected 503, got {resp.status_code}"
 
 
 # ── Pruning (PD task 08d65305) ──────────────────────────────────────────────

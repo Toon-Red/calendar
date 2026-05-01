@@ -142,18 +142,20 @@ def _load_calendars() -> list[dict]:
     # On Windows the file may briefly be unavailable during an os.replace()
     # from a concurrent writer, or a reader may see a zero-length / partial
     # file during the rename.  Retry on all transient I/O and parse errors.
+    last_err: Exception | None = None
     for attempt in range(10):
         try:
             raw = CALENDARS_FILE.read_text(encoding="utf-8")
             if not raw.strip():
                 raise json.JSONDecodeError("empty file", raw, 0)
             return json.loads(raw)
-        except (PermissionError, FileNotFoundError, json.JSONDecodeError):
+        except (PermissionError, FileNotFoundError, json.JSONDecodeError) as exc:
+            last_err = exc
             if attempt < 9:
                 time.sleep(0.05 * (attempt + 1))
             else:
-                log.error("_load_calendars: exhausted retries – returning []")
-                return []
+                log.error("_load_calendars: exhausted retries – raising")
+                raise OSError("Calendar storage temporarily unavailable") from last_err
     return []  # unreachable — keeps type-checkers happy
 
 
@@ -165,18 +167,20 @@ def _save_calendars(cals: list[dict]) -> None:
 def _load_events() -> list[dict]:
     if not EVENTS_FILE.exists():
         return []
+    last_err: Exception | None = None
     for attempt in range(10):
         try:
             raw = EVENTS_FILE.read_text(encoding="utf-8")
             if not raw.strip():
                 raise json.JSONDecodeError("empty file", raw, 0)
             return json.loads(raw)
-        except (PermissionError, FileNotFoundError, json.JSONDecodeError):
+        except (PermissionError, FileNotFoundError, json.JSONDecodeError) as exc:
+            last_err = exc
             if attempt < 9:
                 time.sleep(0.05 * (attempt + 1))
             else:
-                log.error("_load_events: exhausted retries – returning []")
-                return []
+                log.error("_load_events: exhausted retries – raising")
+                raise OSError("Event storage temporarily unavailable") from last_err
     return []  # unreachable — keeps type-checkers happy
 
 
@@ -443,18 +447,31 @@ a:hover{{background:#1e293b}}
 
 @app.get("/api/calendars")
 def list_calendars():
-    return _load_calendars()
+    try:
+        return _load_calendars()
+    except Exception as exc:
+        log.error("list_calendars: %s: %s", type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
 
 
 @app.post("/api/calendars", status_code=201)
 def create_calendar(body: CalendarCreate):
-    cal_id = f"custom-{uuid.uuid4().hex[:8]}"
-    return _ensure_calendar(cal_id, body.name, "custom", color=body.color)
+    try:
+        cal_id = f"custom-{uuid.uuid4().hex[:8]}"
+        return _ensure_calendar(cal_id, body.name, "custom", color=body.color)
+    except Exception as exc:
+        log.error("create_calendar: %s: %s", type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
 
 
 @app.get("/api/calendars/{cal_id}")
 def get_calendar(cal_id: str):
-    for c in _load_calendars():
+    try:
+        cals = _load_calendars()
+    except Exception as exc:
+        log.error("get_calendar(%s): %s: %s", cal_id, type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
+    for c in cals:
         if c["id"] == cal_id:
             return c
     raise HTTPException(404, "Calendar not found")
@@ -462,29 +479,41 @@ def get_calendar(cal_id: str):
 
 @app.delete("/api/calendars/{cal_id}")
 def delete_calendar(cal_id: str):
-    cals = _load_calendars()
-    target = next((c for c in cals if c["id"] == cal_id), None)
-    if not target:
-        raise HTTPException(404, "Calendar not found")
-    if target["type"] != "custom":
-        raise HTTPException(400, "Only custom calendars can be deleted")
-    _save_calendars([c for c in cals if c["id"] != cal_id])
-    # Cascade: drop events on that calendar
-    _save_events([e for e in _load_events() if e.get("calendar_id") != cal_id])
-    return {"ok": True}
+    try:
+        cals = _load_calendars()
+        target = next((c for c in cals if c["id"] == cal_id), None)
+        if not target:
+            raise HTTPException(404, "Calendar not found")
+        if target["type"] != "custom":
+            raise HTTPException(400, "Only custom calendars can be deleted")
+        _save_calendars([c for c in cals if c["id"] != cal_id])
+        # Cascade: drop events on that calendar
+        _save_events([e for e in _load_events() if e.get("calendar_id") != cal_id])
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("delete_calendar(%s): %s: %s", cal_id, type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
 
 
 @app.get("/api/calendars/{cal_id}/events")
 def calendar_events(cal_id: str, from_date: Optional[str] = None, to_date: Optional[str] = None):
-    if not _calendar_exists(cal_id):
-        raise HTTPException(404, "Calendar not found")
-    events = [e for e in _load_events() if e.get("calendar_id") == cal_id]
-    if from_date:
-        events = [e for e in events if _date_only(e["start"]) >= from_date]
-    if to_date:
-        events = [e for e in events if _date_only(e["start"]) <= to_date]
-    events.sort(key=lambda e: _normalize_event_date(e["start"]))
-    return events
+    try:
+        if not _calendar_exists(cal_id):
+            raise HTTPException(404, "Calendar not found")
+        events = [e for e in _load_events() if e.get("calendar_id") == cal_id]
+        if from_date:
+            events = [e for e in events if _date_only(e["start"]) >= from_date]
+        if to_date:
+            events = [e for e in events if _date_only(e["start"]) <= to_date]
+        events.sort(key=lambda e: _normalize_event_date(e["start"]))
+        return events
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("calendar_events(%s): %s: %s", cal_id, type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
 
 
 @app.get("/api/calendars/{cal_id}/timeline")
@@ -495,41 +524,47 @@ def calendar_timeline(cal_id: str, days: int = 14):
     Returns ``{by_week: [{week_start, scheduled, completed, cancelled, events}]}``.
     Reuses ``_filter_events()`` for the date-range filtering.
     """
-    if not _calendar_exists(cal_id):
-        raise HTTPException(404, "Calendar not found")
+    try:
+        if not _calendar_exists(cal_id):
+            raise HTTPException(404, "Calendar not found")
 
-    today = date.today()
-    end_date = today + timedelta(days=days)
-    events = _filter_events(
-        calendar_id=cal_id,
-        from_date=today.isoformat(),
-        to=end_date.isoformat(),
-    )
+        today = date.today()
+        end_date = today + timedelta(days=days)
+        events = _filter_events(
+            calendar_id=cal_id,
+            from_date=today.isoformat(),
+            to=end_date.isoformat(),
+        )
 
-    # Bucket events by ISO week (Monday-based).
-    buckets: dict[str, list[dict]] = {}
-    for e in events:
-        try:
-            ev_date = date.fromisoformat(_date_only(e["start"]))
-        except (ValueError, KeyError):
-            continue
-        # Monday of the event's ISO week
-        week_start = ev_date - timedelta(days=ev_date.weekday())
-        key = week_start.isoformat()
-        buckets.setdefault(key, []).append(e)
+        # Bucket events by ISO week (Monday-based).
+        buckets: dict[str, list[dict]] = {}
+        for e in events:
+            try:
+                ev_date = date.fromisoformat(_date_only(e["start"]))
+            except (ValueError, KeyError):
+                continue
+            # Monday of the event's ISO week
+            week_start = ev_date - timedelta(days=ev_date.weekday())
+            key = week_start.isoformat()
+            buckets.setdefault(key, []).append(e)
 
-    by_week = []
-    for week_start in sorted(buckets):
-        week_events = buckets[week_start]
-        by_week.append({
-            "week_start": week_start,
-            "scheduled": sum(1 for e in week_events if e.get("status") == "scheduled"),
-            "completed": sum(1 for e in week_events if e.get("status") == "completed"),
-            "cancelled": sum(1 for e in week_events if e.get("status") == "cancelled"),
-            "events": week_events,
-        })
+        by_week = []
+        for week_start in sorted(buckets):
+            week_events = buckets[week_start]
+            by_week.append({
+                "week_start": week_start,
+                "scheduled": sum(1 for e in week_events if e.get("status") == "scheduled"),
+                "completed": sum(1 for e in week_events if e.get("status") == "completed"),
+                "cancelled": sum(1 for e in week_events if e.get("status") == "cancelled"),
+                "events": week_events,
+            })
 
-    return {"by_week": by_week}
+        return {"by_week": by_week}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("calendar_timeline(%s): %s: %s", cal_id, type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
 
 
 @app.post("/api/calendars/{cal_id}/events", status_code=201)
@@ -639,20 +674,33 @@ def list_events(
       source=pipeline-dashboard|dream|manual
       calendar_id=X            scope to one calendar
     """
-    return _filter_events(
-        date=date, from_date=from_date, to=to,
-        project_id=project_id, source=source, calendar_id=calendar_id,
-    )
+    try:
+        return _filter_events(
+            date=date, from_date=from_date, to=to,
+            project_id=project_id, source=source, calendar_id=calendar_id,
+        )
+    except Exception as exc:
+        log.error("list_events: %s: %s", type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
 
 
 @app.get("/api/events/today")
 def events_today():
-    return _filter_events(date=_today_iso())
+    try:
+        return _filter_events(date=_today_iso())
+    except Exception as exc:
+        log.error("events_today: %s: %s", type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
 
 
 @app.get("/api/events/{event_id}")
 def get_event(event_id: str):
-    for e in _load_events():
+    try:
+        events = _load_events()
+    except Exception as exc:
+        log.error("get_event(%s): %s: %s", event_id, type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
+    for e in events:
         if e["id"] == event_id:
             return e
     raise HTTPException(404, "Event not found")
@@ -719,19 +767,23 @@ def cancel_event(event_id: str):
 @app.get("/api/upcoming")
 def upcoming_events(hours: int = 24, trigger_automation: Optional[bool] = None):
     """Events starting within the next N hours — used by Automation."""
-    now = datetime.now(timezone.utc)
-    cutoff = now + timedelta(hours=hours)
-    out = []
-    for e in _load_events():
-        try:
-            start = datetime.fromisoformat(_normalize_event_date(e["start"]).replace("Z", "+00:00"))
-            if now <= start <= cutoff:
-                if trigger_automation is None or e.get("trigger_automation") == trigger_automation:
-                    out.append(e)
-        except Exception:
-            pass
-    out.sort(key=lambda e: e["start"])
-    return out
+    try:
+        now = datetime.now(timezone.utc)
+        cutoff = now + timedelta(hours=hours)
+        out = []
+        for e in _load_events():
+            try:
+                start = datetime.fromisoformat(_normalize_event_date(e["start"]).replace("Z", "+00:00"))
+                if now <= start <= cutoff:
+                    if trigger_automation is None or e.get("trigger_automation") == trigger_automation:
+                        out.append(e)
+            except Exception:
+                pass
+        out.sort(key=lambda e: e["start"])
+        return out
+    except Exception as exc:
+        log.error("upcoming_events: %s: %s", type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
 
 
 @app.get("/api/projects/{project_id}/events")
