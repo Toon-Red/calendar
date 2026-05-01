@@ -140,15 +140,20 @@ def _load_calendars() -> list[dict]:
     if not CALENDARS_FILE.exists():
         return []
     # On Windows the file may briefly be unavailable during an os.replace()
-    # from a concurrent writer.  Retry a few times before giving up.
+    # from a concurrent writer, or a reader may see a zero-length / partial
+    # file during the rename.  Retry on all transient I/O and parse errors.
     for attempt in range(10):
         try:
-            return json.loads(CALENDARS_FILE.read_text(encoding="utf-8"))
-        except (PermissionError, FileNotFoundError):
+            raw = CALENDARS_FILE.read_text(encoding="utf-8")
+            if not raw.strip():
+                raise json.JSONDecodeError("empty file", raw, 0)
+            return json.loads(raw)
+        except (PermissionError, FileNotFoundError, json.JSONDecodeError):
             if attempt < 9:
                 time.sleep(0.05 * (attempt + 1))
             else:
-                raise
+                log.error("_load_calendars: exhausted retries – returning []")
+                return []
     return []  # unreachable — keeps type-checkers happy
 
 
@@ -162,12 +167,16 @@ def _load_events() -> list[dict]:
         return []
     for attempt in range(10):
         try:
-            return json.loads(EVENTS_FILE.read_text(encoding="utf-8"))
-        except (PermissionError, FileNotFoundError):
+            raw = EVENTS_FILE.read_text(encoding="utf-8")
+            if not raw.strip():
+                raise json.JSONDecodeError("empty file", raw, 0)
+            return json.loads(raw)
+        except (PermissionError, FileNotFoundError, json.JSONDecodeError):
             if attempt < 9:
                 time.sleep(0.05 * (attempt + 1))
             else:
-                raise
+                log.error("_load_events: exhausted retries – returning []")
+                return []
     return []  # unreachable — keeps type-checkers happy
 
 
@@ -357,6 +366,18 @@ def _bootstrap():
     except Exception as e:
         log.warning("Could not fetch projects from Pipeline Dashboard: %s", e)
 
+    # Auto-prune: the event store grows ~20 events/day from EOD seeding.
+    # Without pruning the file balloons past 1 MB and increases the
+    # contention window for every read-modify-write cycle on Windows.
+    try:
+        count = len(_load_events())
+        if count > 2000:
+            log.info("Auto-pruning event store (%d events)", count)
+            result = prune_old_completed_events(keep_days=30)
+            log.info("Auto-prune result: %s", result)
+    except Exception as exc:
+        log.warning("Auto-prune failed (non-fatal): %s", exc)
+
 
 # ── Routes: health + root landing ────────────────────────────────────────────
 
@@ -519,19 +540,24 @@ def create_calendar_event(cal_id: str, body: EventCreate):
     if an event already exists with the same source+source_id, it's updated in place.
     The calendar is auto-created if it follows the 'project-{id}' pattern.
     """
-    if not _calendar_exists(cal_id):
-        if cal_id.startswith("project-"):
-            pid = cal_id.removeprefix("project-")
-            _ensure_calendar(cal_id, pid, "project", project_id=pid)
-        else:
-            raise HTTPException(404, "Calendar not found")
-
-    payload = body.model_dump()
-    payload["start"] = payload.get("start") or _today_iso()
-
-    # Hold the lock across read+modify+write so concurrent POSTs from Dream's
-    # fan-out (goal+deliverable+todo all writing at once) don't lose writes.
+    # Wrap the *entire* handler — including calendar validation — in a broad
+    # try/except so that transient I/O errors (PermissionError from Windows
+    # file locking, JSONDecodeError from reading during an atomic swap, etc.)
+    # surface as a retryable 503 instead of an opaque 500.
     try:
+        if not _calendar_exists(cal_id):
+            if cal_id.startswith("project-"):
+                pid = cal_id.removeprefix("project-")
+                _ensure_calendar(cal_id, pid, "project", project_id=pid)
+            else:
+                raise HTTPException(404, "Calendar not found")
+
+        payload = body.model_dump()
+        payload["start"] = payload.get("start") or _today_iso()
+
+        # Hold the lock across read+modify+write so concurrent POSTs from
+        # Dream's fan-out (goal+deliverable+todo all writing at once) don't
+        # lose writes.
         with _lock:
             events = _load_events()
 
@@ -554,8 +580,10 @@ def create_calendar_event(cal_id: str, body: EventCreate):
             events.append(event)
             _atomic_write(EVENTS_FILE, events)
             return event
-    except PermissionError:
-        log.error("create_calendar_event(%s): file I/O contention after retries", cal_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("create_calendar_event(%s): %s: %s", cal_id, type(exc).__name__, exc)
         raise HTTPException(503, "Storage temporarily unavailable — retry")
 
 
@@ -641,8 +669,8 @@ def delete_event(event_id: str):
             _atomic_write(EVENTS_FILE, remaining)
     except HTTPException:
         raise
-    except PermissionError:
-        log.error("delete_event(%s): file I/O contention after retries", event_id)
+    except Exception as exc:
+        log.error("delete_event(%s): %s: %s", event_id, type(exc).__name__, exc)
         raise HTTPException(503, "Storage temporarily unavailable — retry")
     return {"ok": True}
 
@@ -661,8 +689,8 @@ def complete_event(event_id: str):
                     return e
     except HTTPException:
         raise
-    except PermissionError:
-        log.error("complete_event(%s): file I/O contention after retries", event_id)
+    except Exception as exc:
+        log.error("complete_event(%s): %s: %s", event_id, type(exc).__name__, exc)
         raise HTTPException(503, "Storage temporarily unavailable — retry")
     raise HTTPException(404, "Event not found")
 
@@ -680,8 +708,8 @@ def cancel_event(event_id: str):
                     return e
     except HTTPException:
         raise
-    except PermissionError:
-        log.error("cancel_event(%s): file I/O contention after retries", event_id)
+    except Exception as exc:
+        log.error("cancel_event(%s): %s: %s", event_id, type(exc).__name__, exc)
         raise HTTPException(503, "Storage temporarily unavailable — retry")
     raise HTTPException(404, "Event not found")
 

@@ -170,6 +170,76 @@ def test_delete_returns_503_on_io_contention(monkeypatch):
     assert resp.status_code == 503, f"expected 503, got {resp.status_code}"
 
 
+def test_create_returns_503_on_json_decode_error(monkeypatch):
+    """Regression: if _load_events() hits a JSONDecodeError (e.g. reading the
+    file during an atomic swap on Windows), the endpoint must return 503
+    (not 500).  Previously the except clause only caught PermissionError,
+    so any other exception surfaced as an opaque 500 — which is what the
+    Dream EOD integration test 'Calendar: create+read+delete event' hit."""
+    import app as cal_app
+
+    def _bad_load():
+        raise json.JSONDecodeError("Expecting value", "", 0)
+
+    monkeypatch.setattr(cal_app, "_load_events", _bad_load)
+
+    resp = client.post("/api/calendars/personal/events", json={
+        "title": "probe", "start": "2030-01-01T09:00:00",
+    })
+    assert resp.status_code == 503, f"expected 503, got {resp.status_code}"
+
+
+def test_create_returns_503_on_calendar_load_failure(monkeypatch):
+    """If _load_calendars() fails (called by _calendar_exists before the
+    event write), the endpoint must return 503 — not an unhandled 500."""
+    import app as cal_app
+
+    def _bad_cal_load():
+        raise OSError("simulated disk error")
+
+    monkeypatch.setattr(cal_app, "_load_calendars", _bad_cal_load)
+
+    resp = client.post("/api/calendars/personal/events", json={
+        "title": "probe", "start": "2030-01-01T09:00:00",
+    })
+    assert resp.status_code == 503, f"expected 503, got {resp.status_code}"
+
+
+def test_load_events_graceful_on_corrupt_json(tmp_path):
+    """_load_events() should return [] (not crash) when the file contains
+    corrupted JSON.  This covers the scenario where a reader sees a
+    truncated file during an atomic swap on Windows."""
+    import app as cal_app
+
+    corrupt_file = tmp_path / "events_corrupt.json"
+    corrupt_file.write_text("{truncated", encoding="utf-8")
+
+    original = cal_app.EVENTS_FILE
+    cal_app.EVENTS_FILE = corrupt_file
+    try:
+        result = cal_app._load_events()
+        assert result == [], f"expected [] for corrupt file, got {result!r}"
+    finally:
+        cal_app.EVENTS_FILE = original
+
+
+def test_load_events_handles_empty_file(tmp_path):
+    """An empty events file (e.g. from a crash mid-replace) should return []
+    rather than raising JSONDecodeError."""
+    import app as cal_app
+
+    empty_file = tmp_path / "events_empty.json"
+    empty_file.write_text("", encoding="utf-8")
+
+    original = cal_app.EVENTS_FILE
+    cal_app.EVENTS_FILE = empty_file
+    try:
+        result = cal_app._load_events()
+        assert result == [], f"expected [] for empty file, got {result!r}"
+    finally:
+        cal_app.EVENTS_FILE = original
+
+
 def test_get_event_not_found():
     resp = client.get("/api/events/nonexistent-id")
     assert resp.status_code == 404
