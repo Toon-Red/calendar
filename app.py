@@ -661,6 +661,8 @@ def list_events(
     date: Optional[str] = None,
     from_date: Optional[str] = Query(None, alias="from"),
     to: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
     project_id: Optional[str] = None,
     source: Optional[str] = None,
     calendar_id: Optional[str] = None,
@@ -669,14 +671,18 @@ def list_events(
 
     Query params:
       date=YYYY-MM-DD          single-day match
-      from=DATE&to=DATE        inclusive range
+      from=DATE&to=DATE        inclusive range (aliases: start/end)
+      start=DATE&end=DATE      inclusive range (aliases for from/to)
       project_id=X             events for any calendar tied to that project
       source=pipeline-dashboard|dream|manual
       calendar_id=X            scope to one calendar
     """
+    # start/end are aliases for from/to — explicit from/to win if both given
+    effective_from = from_date or start
+    effective_to = to or end
     try:
         return _filter_events(
-            date=date, from_date=from_date, to=to,
+            date=date, from_date=effective_from, to=effective_to,
             project_id=project_id, source=source, calendar_id=calendar_id,
         )
     except Exception as exc:

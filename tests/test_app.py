@@ -105,6 +105,87 @@ def test_events_today_returns_only_today(monkeypatch, tmp_path):
     assert ids == ["today1", "today2"]
 
 
+def test_events_start_end_filters(monkeypatch):
+    """GET /api/events?start=DATE&end=DATE should filter to that inclusive range.
+    This was the reported bug: start/end query params were silently ignored,
+    returning the full event set instead of the requested window."""
+    import app as cal_app
+
+    fake_events = [
+        {"id": "before", "title": "Before", "start": "2026-04-25T10:00:00",
+         "calendar_id": "personal"},
+        {"id": "day1", "title": "Day 1", "start": "2026-04-27T09:00:00",
+         "calendar_id": "personal"},
+        {"id": "day2", "title": "Day 2", "start": "2026-04-28T14:00:00",
+         "calendar_id": "personal"},
+        {"id": "after", "title": "After", "start": "2026-04-30T08:00:00",
+         "calendar_id": "personal"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+
+    resp = client.get("/api/events?start=2026-04-27&end=2026-04-28")
+    assert resp.status_code == 200
+    ids = sorted(e["id"] for e in resp.json())
+    assert ids == ["day1", "day2"], f"expected only day1+day2, got {ids}"
+
+
+def test_events_start_only(monkeypatch):
+    """start= without end= should return all events from that date onward."""
+    import app as cal_app
+
+    fake_events = [
+        {"id": "old", "title": "Old", "start": "2026-04-25",
+         "calendar_id": "personal"},
+        {"id": "new", "title": "New", "start": "2026-04-28",
+         "calendar_id": "personal"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+
+    resp = client.get("/api/events?start=2026-04-27")
+    assert resp.status_code == 200
+    ids = [e["id"] for e in resp.json()]
+    assert ids == ["new"]
+
+
+def test_events_end_only(monkeypatch):
+    """end= without start= should return all events up to that date."""
+    import app as cal_app
+
+    fake_events = [
+        {"id": "old", "title": "Old", "start": "2026-04-25",
+         "calendar_id": "personal"},
+        {"id": "new", "title": "New", "start": "2026-04-28",
+         "calendar_id": "personal"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+
+    resp = client.get("/api/events?end=2026-04-26")
+    assert resp.status_code == 200
+    ids = [e["id"] for e in resp.json()]
+    assert ids == ["old"]
+
+
+def test_events_from_to_takes_precedence_over_start_end(monkeypatch):
+    """When both from/to and start/end are provided, from/to wins."""
+    import app as cal_app
+
+    fake_events = [
+        {"id": "a", "title": "A", "start": "2026-04-25",
+         "calendar_id": "personal"},
+        {"id": "b", "title": "B", "start": "2026-04-27",
+         "calendar_id": "personal"},
+        {"id": "c", "title": "C", "start": "2026-04-29",
+         "calendar_id": "personal"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+
+    # from=2026-04-27 should win over start=2026-04-25
+    resp = client.get("/api/events?start=2026-04-24&end=2026-04-30&from=2026-04-27&to=2026-04-28")
+    assert resp.status_code == 200
+    ids = [e["id"] for e in resp.json()]
+    assert ids == ["b"], f"from/to should take precedence, got {ids}"
+
+
 def test_event_create_read_delete():
     """Full CRUD cycle: create → read → delete → confirm gone.
 
