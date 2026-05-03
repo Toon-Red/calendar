@@ -42,6 +42,23 @@ def test_health():
     assert data["status"] == "ok"
 
 
+def test_health_includes_version():
+    resp = client.get("/api/health")
+    data = resp.json()
+    assert "version" in data
+    assert data["version"] == "0.2.0"
+
+
+def test_health_includes_uptime():
+    """Health endpoint should report started_at and uptime_seconds for diagnostics."""
+    resp = client.get("/api/health")
+    data = resp.json()
+    assert "started_at" in data
+    assert "uptime_seconds" in data
+    assert isinstance(data["uptime_seconds"], int)
+    assert data["uptime_seconds"] >= 0
+
+
 # ── Calendars CRUD ──────────────────────────────────────────────────────────
 
 def test_list_calendars():

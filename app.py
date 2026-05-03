@@ -35,6 +35,8 @@ from pydantic import BaseModel
 
 log = logging.getLogger("calendar")
 
+_STARTED_AT: Optional[datetime] = None  # set during lifespan startup
+
 DATA_DIR = Path(__file__).parent / "data"
 EVENTS_FILE = DATA_DIR / "events.json"
 CALENDARS_FILE = DATA_DIR / "calendars.json"
@@ -92,6 +94,8 @@ _reuse_opener = urllib.request.build_opener(_ReuseAddrHTTPHandler)
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown lifecycle — replaces the deprecated on_event("startup")."""
+    global _STARTED_AT
+    _STARTED_AT = datetime.now(timezone.utc)
     _bootstrap()
     yield
 
@@ -387,7 +391,14 @@ def _bootstrap():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "0.2.0"}
+    now = datetime.now(timezone.utc)
+    uptime_seconds = (now - _STARTED_AT).total_seconds() if _STARTED_AT else 0
+    return {
+        "status": "ok",
+        "version": "0.2.0",
+        "started_at": _STARTED_AT.isoformat() if _STARTED_AT else None,
+        "uptime_seconds": int(uptime_seconds),
+    }
 
 
 @app.get("/")
