@@ -336,6 +336,48 @@ def _date_only(s: str) -> str:
     return s[:10]
 
 
+def _event_overlaps_date(event: dict, target_date: str) -> bool:
+    """Return True if *event* overlaps with *target_date* (YYYY-MM-DD).
+
+    Overlap logic:
+      • start_date == target_date → yes (event starts today)
+      • start_date < target_date AND end_date >= target_date → yes (multi-day
+        event that spans into today)
+      • Otherwise → no
+
+    Events without a start field are excluded. Events without an end field
+    (or where end == start) are treated as single-day events — they only
+    match when their start date equals target_date.
+
+    This is the ONE canonical definition of 'events on a date' — the
+    landing page, /api/events/today, and any future consumer must use this
+    helper so counts always agree.
+    """
+    start_raw = event.get("start") or ""
+    start = start_raw[:10]
+    if not start or len(start) < 10:
+        return False
+    if start == target_date:
+        return True
+    # Multi-day: event started before target but hasn't ended yet.
+    end_raw = event.get("end") or ""
+    end = end_raw[:10]
+    if end and len(end) >= 10 and start < target_date <= end:
+        return True
+    return False
+
+
+def _events_overlapping_date(target_date: str) -> list[dict]:
+    """Return all events that overlap *target_date*, sorted by start time.
+
+    This is the single source of truth for 'today' counts across the app.
+    """
+    events = _load_events()
+    matched = [e for e in events if _event_overlaps_date(e, target_date)]
+    matched.sort(key=lambda e: _normalize_event_date(e.get("start", "")))
+    return matched
+
+
 # ── Startup: bootstrap personal + project calendars, migrate legacy events ──
 
 def _bootstrap():
@@ -413,7 +455,7 @@ def root():
     cals = _load_calendars()
     events = _load_events()
     today_iso = _today_iso()
-    today_events = [e for e in events if (e.get("start") or "")[:10] == today_iso]
+    today_events = _events_overlapping_date(today_iso)
     rows = "".join(
         f"<tr><td>{c.get('id')}</td><td>{c.get('name')}</td><td>{c.get('type')}</td></tr>"
         for c in cals
@@ -703,10 +745,31 @@ def list_events(
 
 @app.get("/api/events/today")
 def events_today():
+    """Return events overlapping today's local date.
+
+    Uses the canonical ``_events_overlapping_date`` helper so the count
+    always agrees with the landing-page stat card and the /count endpoint.
+    """
     try:
-        return _filter_events(date=_today_iso())
+        return _events_overlapping_date(_today_iso())
     except Exception as exc:
         log.error("events_today: %s: %s", type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
+
+
+@app.get("/api/events/today/count")
+def events_today_count():
+    """Lightweight endpoint returning just the today-event count.
+
+    Clients that only need the number (e.g. dashboard badges) can hit this
+    instead of fetching and counting the full event list client-side.
+    Guarantees the same value as the landing page and ``/api/events/today``.
+    """
+    try:
+        today_iso = _today_iso()
+        return {"date": today_iso, "count": len(_events_overlapping_date(today_iso))}
+    except Exception as exc:
+        log.error("events_today_count: %s: %s", type(exc).__name__, exc)
         raise HTTPException(503, "Storage temporarily unavailable — retry")
 
 

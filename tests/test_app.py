@@ -607,3 +607,130 @@ def test_storage_isolation_no_writes_to_live_store():
 
     # Confirm the live file wasn't modified at all.
     assert before == after, "Live events.json was modified during test"
+
+
+# ── Today overlap logic ────────────────────────────────────────────────────
+
+def test_event_overlaps_date_single_day():
+    """An event with no end (or end == start) only matches its start date."""
+    import app as cal_app
+    assert cal_app._event_overlaps_date(
+        {"start": "2026-05-03", "end": None}, "2026-05-03") is True
+    assert cal_app._event_overlaps_date(
+        {"start": "2026-05-03", "end": None}, "2026-05-04") is False
+    assert cal_app._event_overlaps_date(
+        {"start": "2026-05-03", "end": "2026-05-03"}, "2026-05-03") is True
+    assert cal_app._event_overlaps_date(
+        {"start": "2026-05-03", "end": "2026-05-03"}, "2026-05-02") is False
+
+
+def test_event_overlaps_date_multi_day():
+    """A multi-day event overlaps every date from start through end inclusive."""
+    import app as cal_app
+    event = {"start": "2026-05-01", "end": "2026-05-05"}
+    assert cal_app._event_overlaps_date(event, "2026-04-30") is False
+    assert cal_app._event_overlaps_date(event, "2026-05-01") is True
+    assert cal_app._event_overlaps_date(event, "2026-05-03") is True
+    assert cal_app._event_overlaps_date(event, "2026-05-05") is True
+    assert cal_app._event_overlaps_date(event, "2026-05-06") is False
+
+
+def test_event_overlaps_date_with_time_suffix():
+    """Start/end values with time components still extract the date correctly."""
+    import app as cal_app
+    event = {"start": "2026-05-02T09:00:00+00:00", "end": "2026-05-04T17:00:00+00:00"}
+    assert cal_app._event_overlaps_date(event, "2026-05-01") is False
+    assert cal_app._event_overlaps_date(event, "2026-05-02") is True
+    assert cal_app._event_overlaps_date(event, "2026-05-03") is True
+    assert cal_app._event_overlaps_date(event, "2026-05-04") is True
+    assert cal_app._event_overlaps_date(event, "2026-05-05") is False
+
+
+def test_event_overlaps_date_missing_start():
+    """Events without a start field never match any date."""
+    import app as cal_app
+    assert cal_app._event_overlaps_date({"end": "2026-05-03"}, "2026-05-03") is False
+    assert cal_app._event_overlaps_date({}, "2026-05-03") is False
+
+
+def test_events_today_endpoint_uses_overlap(monkeypatch):
+    """/api/events/today should return events overlapping today, including
+    multi-day events that started before today."""
+    import app as cal_app
+    from app import _today_iso
+    today = _today_iso()
+    from datetime import date, timedelta
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+
+    fake_events = [
+        {"id": "single-today", "title": "Single day today",
+         "start": today, "end": None, "calendar_id": "personal"},
+        {"id": "multi-spans", "title": "Multi-day spanning today",
+         "start": yesterday, "end": tomorrow, "calendar_id": "personal"},
+        {"id": "ended-yesterday", "title": "Ended yesterday",
+         "start": "2026-01-01", "end": yesterday, "calendar_id": "personal"},
+        {"id": "starts-tomorrow", "title": "Starts tomorrow",
+         "start": tomorrow, "end": None, "calendar_id": "personal"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+
+    resp = client.get("/api/events/today")
+    assert resp.status_code == 200
+    ids = sorted(e["id"] for e in resp.json())
+    assert ids == ["multi-spans", "single-today"]
+
+
+def test_events_today_count_endpoint(monkeypatch):
+    """/api/events/today/count returns the same number as len(/api/events/today)."""
+    import app as cal_app
+    from app import _today_iso
+    today = _today_iso()
+
+    fake_events = [
+        {"id": "a", "title": "A", "start": today, "end": None, "calendar_id": "personal"},
+        {"id": "b", "title": "B", "start": today, "end": None, "calendar_id": "personal"},
+        {"id": "c", "title": "C", "start": "2020-01-01", "end": None, "calendar_id": "personal"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+
+    resp_list = client.get("/api/events/today")
+    resp_count = client.get("/api/events/today/count")
+    assert resp_list.status_code == 200
+    assert resp_count.status_code == 200
+    assert resp_count.json()["count"] == len(resp_list.json())
+    assert resp_count.json()["count"] == 2
+    assert resp_count.json()["date"] == today
+
+
+def test_landing_page_today_matches_api(monkeypatch):
+    """The landing page 'Today' stat card must show the same count as
+    /api/events/today — this was the original reported bug."""
+    import app as cal_app
+    from app import _today_iso
+    today = _today_iso()
+    from datetime import date, timedelta
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    next_week = (date.today() + timedelta(days=7)).isoformat()
+
+    fake_events = [
+        {"id": "t1", "title": "Today", "start": today, "end": None, "calendar_id": "personal"},
+        {"id": "t2", "title": "Spans", "start": yesterday, "end": next_week, "calendar_id": "personal"},
+        {"id": "t3", "title": "Old", "start": "2020-01-01", "end": None, "calendar_id": "personal"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+
+    # Landing page HTML should show count 2
+    resp_html = client.get("/")
+    assert resp_html.status_code == 200
+    # The number appears in a <div class="num">N</div> element
+    assert '>2</div>' in resp_html.text
+
+    # API endpoint should return 2 events
+    resp_api = client.get("/api/events/today")
+    assert resp_api.status_code == 200
+    assert len(resp_api.json()) == 2
+
+    # Count endpoint agrees
+    resp_count = client.get("/api/events/today/count")
+    assert resp_count.json()["count"] == 2
