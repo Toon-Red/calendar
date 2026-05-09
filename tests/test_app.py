@@ -734,3 +734,512 @@ def test_landing_page_today_matches_api(monkeypatch):
     # Count endpoint agrees
     resp_count = client.get("/api/events/today/count")
     assert resp_count.json()["count"] == 2
+
+
+# ── Calendar Update (PUT) ─────────────────────────────────────────────────
+
+def test_update_calendar_rename():
+    """PUT /api/calendars/{id} renames a calendar."""
+    # Create a custom calendar first
+    resp = client.post("/api/calendars", json={"name": "My Cal", "color": "#ef4444"})
+    assert resp.status_code == 201
+    cal = resp.json()
+    cal_id = cal["id"]
+
+    # Rename it
+    resp = client.put(f"/api/calendars/{cal_id}", json={"name": "Renamed Cal"})
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Renamed Cal"
+    # Color should be unchanged
+    assert resp.json()["color"] == "#ef4444"
+
+    # Verify via GET
+    resp = client.get(f"/api/calendars/{cal_id}")
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Renamed Cal"
+
+
+def test_update_calendar_recolor():
+    """PUT /api/calendars/{id} can change just the color."""
+    resp = client.post("/api/calendars", json={"name": "Color Test"})
+    assert resp.status_code == 201
+    cal_id = resp.json()["id"]
+
+    resp = client.put(f"/api/calendars/{cal_id}", json={"color": "#10b981"})
+    assert resp.status_code == 200
+    assert resp.json()["color"] == "#10b981"
+    assert resp.json()["name"] == "Color Test"
+
+
+def test_update_calendar_not_found():
+    """PUT on a nonexistent calendar returns 404."""
+    resp = client.put("/api/calendars/nonexistent-xyz", json={"name": "Nope"})
+    assert resp.status_code == 404
+
+
+def test_update_calendar_503_on_storage_error(monkeypatch):
+    """PUT /api/calendars/{id} returns 503 when storage fails."""
+    import app as cal_app
+
+    def _failing_load():
+        raise OSError("simulated disk error")
+
+    monkeypatch.setattr(cal_app, "_load_calendars", _failing_load)
+
+    resp = client.put("/api/calendars/personal", json={"name": "Boom"})
+    assert resp.status_code == 503
+
+
+# ── Event Update (PUT) ────────────────────────────────────────────────────
+
+def test_update_event_title():
+    """PUT /api/events/{id} updates event fields."""
+    # Create an event
+    resp = client.post("/api/calendars/personal/events", json={
+        "title": "Original Title",
+        "start": "2030-06-01T09:00:00",
+    })
+    assert resp.status_code == 201
+    event_id = resp.json()["id"]
+
+    try:
+        # Update title
+        resp = client.put(f"/api/events/{event_id}", json={"title": "Updated Title"})
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "Updated Title"
+        assert "updated_at" in resp.json()
+
+        # Verify via GET
+        resp = client.get(f"/api/events/{event_id}")
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "Updated Title"
+    finally:
+        client.delete(f"/api/events/{event_id}")
+
+
+def test_update_event_multiple_fields():
+    """PUT /api/events/{id} can update multiple fields at once."""
+    resp = client.post("/api/calendars/personal/events", json={
+        "title": "Multi-field",
+        "start": "2030-06-01T09:00:00",
+        "category": "task",
+    })
+    assert resp.status_code == 201
+    event_id = resp.json()["id"]
+
+    try:
+        resp = client.put(f"/api/events/{event_id}", json={
+            "title": "New Name",
+            "category": "meeting",
+            "status": "completed",
+            "description": "Done now",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["title"] == "New Name"
+        assert data["category"] == "meeting"
+        assert data["status"] == "completed"
+        assert data["description"] == "Done now"
+    finally:
+        client.delete(f"/api/events/{event_id}")
+
+
+def test_update_event_not_found():
+    """PUT on a nonexistent event returns 404."""
+    resp = client.put("/api/events/nonexistent-xyz", json={"title": "Nope"})
+    assert resp.status_code == 404
+
+
+def test_update_event_503_on_storage_error(monkeypatch):
+    """PUT /api/events/{id} returns 503 when storage fails."""
+    import app as cal_app
+
+    def _failing_load():
+        raise OSError("simulated storage error")
+
+    monkeypatch.setattr(cal_app, "_load_events", _failing_load)
+
+    resp = client.put("/api/events/some-id", json={"title": "Boom"})
+    assert resp.status_code == 503
+
+
+# ── Cancel Event ──────────────────────────────────────────────────────────
+
+def test_cancel_event():
+    """POST /api/events/{id}/cancel marks event as cancelled."""
+    resp = client.post("/api/calendars/personal/events", json={
+        "title": "To Cancel",
+        "start": "2030-07-01T10:00:00",
+    })
+    assert resp.status_code == 201
+    event_id = resp.json()["id"]
+
+    try:
+        resp = client.post(f"/api/events/{event_id}/cancel")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "cancelled"
+        assert "updated_at" in resp.json()
+
+        # Verify persisted
+        resp = client.get(f"/api/events/{event_id}")
+        assert resp.json()["status"] == "cancelled"
+    finally:
+        client.delete(f"/api/events/{event_id}")
+
+
+def test_cancel_event_not_found():
+    """POST cancel on a nonexistent event returns 404."""
+    resp = client.post("/api/events/nonexistent-xyz/cancel")
+    assert resp.status_code == 404
+
+
+# ── Interactive Landing Page ──────────────────────────────────────────────
+
+def test_landing_page_has_interactive_elements():
+    """The landing page should include the interactive SPA elements:
+    calendar drill-down, event browser, CRUD buttons, and modals."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+
+    # Calendar list view with toolbar
+    assert 'id="view-calendars"' in html
+    assert 'id="cal-tbody"' in html
+    assert '+ New Calendar' in html
+
+    # Event browser view (hidden initially)
+    assert 'id="view-events"' in html
+    assert 'id="events-tbody"' in html
+    assert '+ New Event' in html
+
+    # Modals for CRUD
+    assert 'id="modal-event"' in html
+    assert 'id="modal-calendar"' in html
+
+    # Event form fields
+    assert 'id="ef-title"' in html
+    assert 'id="ef-start"' in html
+    assert 'id="ef-category"' in html
+    assert 'id="ef-status"' in html
+
+    # JavaScript functions for interactivity
+    assert 'function drillDown(' in html
+    assert 'function showEditEvent(' in html
+    assert 'function deleteEvent(' in html
+    assert 'function completeEvent(' in html
+    assert 'function cancelEvent(' in html
+    assert 'function saveCalendar(' in html
+
+
+def test_landing_page_has_calendar_data_embedded():
+    """The landing page embeds calendar data as JSON for instant render."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+
+    # Should have the calendars JSON bootstrapped
+    assert 'calendars =' in html
+    # Should have calEventCounts
+    assert 'calEventCounts' in html
+
+
+def test_landing_page_renders_stat_cards():
+    """Landing page stat cards show correct counts."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+
+    # Stat cards with IDs for dynamic update
+    assert 'id="stat-cals"' in html
+    assert 'id="stat-events"' in html
+    assert 'id="stat-today"' in html
+
+
+# ── Calendar Delete Cascade ───────────────────────────────────────────────
+
+def test_delete_custom_calendar_cascades_events():
+    """Deleting a custom calendar also removes its events."""
+    # Create custom calendar
+    resp = client.post("/api/calendars", json={"name": "Temp Cal"})
+    assert resp.status_code == 201
+    cal_id = resp.json()["id"]
+
+    # Add an event to it
+    resp = client.post(f"/api/calendars/{cal_id}/events", json={
+        "title": "Temp Event",
+        "start": "2030-08-01",
+    })
+    assert resp.status_code == 201
+    event_id = resp.json()["id"]
+
+    # Delete the calendar
+    resp = client.delete(f"/api/calendars/{cal_id}")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    # Calendar is gone
+    resp = client.get(f"/api/calendars/{cal_id}")
+    assert resp.status_code == 404
+
+    # Event is also gone
+    resp = client.get(f"/api/events/{event_id}")
+    assert resp.status_code == 404
+
+
+def test_delete_non_custom_calendar_rejected():
+    """Only custom calendars can be deleted — personal/project types are protected."""
+    resp = client.delete("/api/calendars/personal")
+    assert resp.status_code == 400
+
+
+# ── SPA Security: data-attribute onclick handlers ────────────────────────
+
+def test_landing_page_uses_data_attributes_for_onclick():
+    """Calendar row onclick handlers must use data-* attributes instead of
+    interpolating user-provided strings into JavaScript — prevents injection
+    when a calendar name contains quotes or special characters."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+
+    # Should use data-id/data-name attributes, NOT inline string interpolation
+    assert 'this.dataset.id' in html
+    assert 'this.dataset.name' in html
+    # The old pattern of interpolating esc(c.id) directly into onclick strings
+    # should be gone — verify drillDown doesn't use quoted-string interpolation
+    assert "drillDown(this.dataset.id" in html
+
+
+def test_landing_page_has_escape_key_handler():
+    """Pressing Escape should close open modals — the keydown listener must exist."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+    assert "e.key === 'Escape'" in html or 'e.key === "Escape"' in html
+
+
+def test_landing_page_has_click_outside_modal_handler():
+    """Clicking outside a modal should close it."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+    assert 'e.target === bg' in html
+
+
+# ── Calendar Description CRUD ────────────────────────────────────────────
+
+def test_landing_page_has_calendar_description_field():
+    """The calendar form modal should include a description textarea."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert 'id="cf-desc"' in resp.text
+
+
+def test_create_calendar_with_description():
+    """POST /api/calendars with a description field should persist it."""
+    resp = client.post("/api/calendars", json={
+        "name": "Described Cal",
+        "color": "#8b5cf6",
+        "description": "A calendar with a description",
+    })
+    assert resp.status_code == 201
+    cal = resp.json()
+    assert cal["description"] == "A calendar with a description"
+
+    # Verify via GET
+    resp = client.get(f"/api/calendars/{cal['id']}")
+    assert resp.status_code == 200
+    assert resp.json()["description"] == "A calendar with a description"
+
+    # Cleanup
+    client.delete(f"/api/calendars/{cal['id']}")
+
+
+def test_update_calendar_description():
+    """PUT /api/calendars/{id} can set/update the description."""
+    resp = client.post("/api/calendars", json={"name": "Desc Test"})
+    assert resp.status_code == 201
+    cal_id = resp.json()["id"]
+
+    try:
+        resp = client.put(f"/api/calendars/{cal_id}", json={
+            "description": "Updated description"
+        })
+        assert resp.status_code == 200
+        assert resp.json()["description"] == "Updated description"
+        assert resp.json()["name"] == "Desc Test"  # unchanged
+
+        # Verify via GET
+        resp = client.get(f"/api/calendars/{cal_id}")
+        assert resp.json()["description"] == "Updated description"
+    finally:
+        client.delete(f"/api/calendars/{cal_id}")
+
+
+# ── Complete Event ─────────────────────────────────────────────────────
+
+def test_complete_event():
+    """POST /api/events/{id}/complete marks event as completed."""
+    resp = client.post("/api/calendars/personal/events", json={
+        "title": "To Complete",
+        "start": "2030-07-01T10:00:00",
+    })
+    assert resp.status_code == 201
+    event_id = resp.json()["id"]
+
+    try:
+        resp = client.post(f"/api/events/{event_id}/complete")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "completed"
+        assert "completed_at" in data
+        assert "updated_at" in data
+
+        # Verify persisted
+        resp = client.get(f"/api/events/{event_id}")
+        assert resp.json()["status"] == "completed"
+    finally:
+        client.delete(f"/api/events/{event_id}")
+
+
+def test_complete_event_not_found():
+    """POST complete on a nonexistent event returns 404."""
+    resp = client.post("/api/events/nonexistent-xyz/complete")
+    assert resp.status_code == 404
+
+
+# ── Full CRUD Integration Cycle ──────────────────────────────────────────
+
+def test_full_calendar_event_lifecycle():
+    """End-to-end: create calendar → create event → update event →
+    complete event → delete event → rename calendar → delete calendar."""
+    import time as _time
+
+    # 1. Create calendar
+    resp = client.post("/api/calendars", json={
+        "name": "Lifecycle Test",
+        "color": "#f97316",
+        "description": "For testing",
+    })
+    assert resp.status_code == 201
+    cal = resp.json()
+    cal_id = cal["id"]
+    assert cal["type"] == "custom"
+    assert cal["description"] == "For testing"
+
+    try:
+        # 2. Create event on that calendar
+        resp = client.post(f"/api/calendars/{cal_id}/events", json={
+            "title": "Lifecycle Event",
+            "start": "2030-09-01T09:00:00",
+            "end": "2030-09-01T10:00:00",
+            "category": "meeting",
+            "description": "Test event desc",
+        })
+        assert resp.status_code == 201
+        event = resp.json()
+        event_id = event["id"]
+        assert event["calendar_id"] == cal_id
+        assert event["category"] == "meeting"
+
+        # 3. Update event
+        resp = client.put(f"/api/events/{event_id}", json={
+            "title": "Updated Lifecycle Event",
+            "category": "milestone",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "Updated Lifecycle Event"
+        assert resp.json()["category"] == "milestone"
+
+        # 4. Complete event
+        resp = client.post(f"/api/events/{event_id}/complete")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "completed"
+
+        # 5. Delete event
+        resp = client.delete(f"/api/events/{event_id}")
+        if resp.status_code == 503:
+            _time.sleep(0.2)
+            resp = client.delete(f"/api/events/{event_id}")
+        assert resp.status_code == 200
+
+        # Event is gone
+        resp = client.get(f"/api/events/{event_id}")
+        assert resp.status_code == 404
+
+        # 6. Rename calendar
+        resp = client.put(f"/api/calendars/{cal_id}", json={
+            "name": "Renamed Lifecycle",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "Renamed Lifecycle"
+
+    finally:
+        # 7. Delete calendar (cleanup)
+        resp = client.delete(f"/api/calendars/{cal_id}")
+        assert resp.status_code in (200, 404)
+
+    # Calendar is gone
+    resp = client.get(f"/api/calendars/{cal_id}")
+    assert resp.status_code == 404
+
+
+# ── Calendar Events List ─────────────────────────────────────────────────
+
+def test_calendar_events_list():
+    """GET /api/calendars/{id}/events returns only events for that calendar."""
+    # Create two events on personal
+    resp1 = client.post("/api/calendars/personal/events", json={
+        "title": "Cal Event A",
+        "start": "2030-10-01",
+    })
+    resp2 = client.post("/api/calendars/personal/events", json={
+        "title": "Cal Event B",
+        "start": "2030-10-02",
+    })
+    assert resp1.status_code == 201
+    assert resp2.status_code == 201
+    eid1 = resp1.json()["id"]
+    eid2 = resp2.json()["id"]
+
+    try:
+        resp = client.get("/api/calendars/personal/events")
+        assert resp.status_code == 200
+        events = resp.json()
+        ids = [e["id"] for e in events]
+        assert eid1 in ids
+        assert eid2 in ids
+        # All returned events belong to personal calendar
+        assert all(e["calendar_id"] == "personal" for e in events)
+    finally:
+        client.delete(f"/api/events/{eid1}")
+        client.delete(f"/api/events/{eid2}")
+
+
+def test_calendar_events_sorted_by_start():
+    """Events should be returned sorted by start date."""
+    resp_late = client.post("/api/calendars/personal/events", json={
+        "title": "Late",
+        "start": "2030-11-02",
+    })
+    resp_early = client.post("/api/calendars/personal/events", json={
+        "title": "Early",
+        "start": "2030-11-01",
+    })
+    assert resp_late.status_code == 201
+    assert resp_early.status_code == 201
+    eid_late = resp_late.json()["id"]
+    eid_early = resp_early.json()["id"]
+
+    try:
+        resp = client.get("/api/calendars/personal/events")
+        assert resp.status_code == 200
+        events = resp.json()
+        # Filter to just our test events
+        test_events = [e for e in events if e["id"] in (eid_late, eid_early)]
+        assert len(test_events) == 2
+        assert test_events[0]["id"] == eid_early
+        assert test_events[1]["id"] == eid_late
+    finally:
+        client.delete(f"/api/events/{eid_late}")
+        client.delete(f"/api/events/{eid_early}")

@@ -273,6 +273,12 @@ class CalendarCreate(BaseModel):
     description: Optional[str] = None
 
 
+class CalendarUpdate(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
+    description: Optional[str] = None
+
+
 class EventCreate(BaseModel):
     title: str
     start: Optional[str] = None
@@ -288,6 +294,17 @@ class EventCreate(BaseModel):
     trigger_automation: bool = False
 
 
+class EventUpdate(BaseModel):
+    title: Optional[str] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    all_day: Optional[bool] = None
+    status: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    recurring: Optional[str] = None
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _now_iso() -> str:
@@ -300,7 +317,8 @@ def _today_iso() -> str:
 
 def _ensure_calendar(cal_id: str, name: str, ctype: str, *,
                      project_id: Optional[str] = None,
-                     color: Optional[str] = None) -> dict:
+                     color: Optional[str] = None,
+                     description: Optional[str] = None) -> dict:
     """Idempotently create a calendar."""
     cals = _load_calendars()
     for c in cals:
@@ -312,6 +330,7 @@ def _ensure_calendar(cal_id: str, name: str, ctype: str, *,
         "type": ctype,
         "project_id": project_id,
         "color": color or DEFAULT_PALETTE[len(cals) % len(DEFAULT_PALETTE)],
+        "description": description,
         "created_at": _now_iso(),
     }
     cals.append(cal)
@@ -447,52 +466,536 @@ def health():
 def root():
     """Landing page for the launcher BrowserView.
 
-    Shows a small status panel + counts and links to the API docs.
-    Without this the launcher tab loads `/` and gets a generic
-    `{"detail":"Not Found"}` instead of a useful page.
+    Interactive SPA that supports:
+      - Calendar list with per-calendar event counts
+      - Click-to-drill-down event browser per calendar
+      - Full CRUD: create, edit, delete events; rename/delete calendars
     """
     from fastapi.responses import HTMLResponse
     cals = _load_calendars()
     events = _load_events()
     today_iso = _today_iso()
     today_events = _events_overlapping_date(today_iso)
-    rows = "".join(
-        f"<tr><td>{c.get('id')}</td><td>{c.get('name')}</td><td>{c.get('type')}</td></tr>"
-        for c in cals
-    )
+
+    # Pre-compute event counts per calendar for the initial server render
+    cal_event_counts: dict[str, int] = {}
+    for e in events:
+        cid = e.get("calendar_id", "")
+        cal_event_counts[cid] = cal_event_counts.get(cid, 0) + 1
+
+    # Pre-serialize to JSON for safe injection into the template
+    import json as _json
+    cals_json = _json.dumps(cals, default=str)
+    cal_counts_json = _json.dumps(cal_event_counts)
+
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Dream Calendar</title>
 <style>
+*{{box-sizing:border-box}}
 body{{font-family:-apple-system,Segoe UI,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:24px}}
 h1{{color:#93c5fd;margin:0 0 4px}}
 .sub{{color:#64748b;font-size:13px;margin-bottom:24px}}
-.stats{{display:flex;gap:16px;margin-bottom:24px}}
-.stat{{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:14px 18px;flex:1}}
+.stats{{display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap}}
+.stat{{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:14px 18px;flex:1;min-width:120px}}
 .stat .num{{font-size:28px;font-weight:700;color:#60a5fa}}
 .stat .label{{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-top:4px}}
 table{{width:100%;border-collapse:collapse;background:#1e293b;border:1px solid #334155;border-radius:8px;overflow:hidden}}
 th,td{{padding:10px 14px;text-align:left;border-bottom:1px solid #334155;font-size:13px}}
 th{{background:#0f172a;color:#94a3b8;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em}}
 tr:last-child td{{border-bottom:none}}
-.links{{margin-top:24px;display:flex;gap:12px}}
-a{{color:#60a5fa;text-decoration:none;border:1px solid #334155;padding:6px 12px;border-radius:6px}}
-a:hover{{background:#1e293b}}
+.links{{margin-top:24px;display:flex;gap:12px;flex-wrap:wrap}}
+a,.btn{{color:#60a5fa;text-decoration:none;border:1px solid #334155;padding:6px 12px;border-radius:6px;cursor:pointer;background:transparent;font-size:13px;display:inline-block}}
+a:hover,.btn:hover{{background:#1e293b}}
+.btn-primary{{background:#3b82f6;color:#fff;border-color:#3b82f6}}
+.btn-primary:hover{{background:#2563eb}}
+.btn-danger{{color:#ef4444;border-color:#ef4444}}
+.btn-danger:hover{{background:#7f1d1d}}
+.btn-success{{color:#10b981;border-color:#10b981}}
+.btn-success:hover{{background:#064e3b}}
+.btn-warning{{color:#f59e0b;border-color:#f59e0b}}
+.btn-warning:hover{{background:#78350f}}
+.btn-sm{{padding:3px 8px;font-size:12px}}
+/* Calendar list */
+.cal-row{{cursor:pointer;transition:background .15s}}
+.cal-row:hover{{background:#334155}}
+.cal-color{{width:12px;height:12px;border-radius:3px;display:inline-block;margin-right:8px;vertical-align:middle}}
+.cal-count{{color:#64748b;font-size:12px}}
+/* Toolbar */
+.toolbar{{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}}
+.toolbar h2{{margin:0;color:#93c5fd;font-size:18px;flex:1}}
+/* Status badges */
+.badge{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}}
+.badge-scheduled{{background:#1e3a5f;color:#60a5fa}}
+.badge-completed{{background:#064e3b;color:#10b981}}
+.badge-cancelled{{background:#7f1d1d;color:#ef4444}}
+/* Modal */
+.modal-bg{{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center}}
+.modal-bg.open{{display:flex}}
+.modal{{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;width:480px;max-width:95vw;max-height:90vh;overflow-y:auto}}
+.modal h3{{margin:0 0 16px;color:#93c5fd}}
+.field{{margin-bottom:14px}}
+.field label{{display:block;font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}}
+.field input,.field select,.field textarea{{width:100%;padding:8px 10px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:13px;font-family:inherit}}
+.field textarea{{resize:vertical;min-height:60px}}
+.field input:focus,.field select:focus,.field textarea:focus{{outline:none;border-color:#3b82f6}}
+.field-row{{display:flex;gap:12px}}
+.field-row .field{{flex:1}}
+.modal-actions{{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}}
+/* Empty state */
+.empty{{text-align:center;padding:40px 20px;color:#64748b}}
+.empty-icon{{font-size:32px;margin-bottom:8px}}
+/* Toast */
+.toast{{position:fixed;bottom:24px;right:24px;background:#10b981;color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:200;opacity:0;transform:translateY(10px);transition:all .3s}}
+.toast.show{{opacity:1;transform:translateY(0)}}
+.toast.error{{background:#ef4444}}
+/* Actions cell */
+.actions{{white-space:nowrap}}
+.actions .btn-sm{{margin-right:4px}}
 </style></head>
 <body>
-<h1>📅 Dream Calendar</h1>
+
+<h1>\U0001f4c5 Dream Calendar</h1>
 <div class="sub">Multi-calendar schedule storage and event API · v0.2.0</div>
+
+<!-- Stats -->
 <div class="stats">
-  <div class="stat"><div class="num">{len(cals)}</div><div class="label">Calendars</div></div>
-  <div class="stat"><div class="num">{len(events)}</div><div class="label">Total events</div></div>
-  <div class="stat"><div class="num">{len(today_events)}</div><div class="label">Today</div></div>
+  <div class="stat"><div class="num" id="stat-cals">{len(cals)}</div><div class="label">Calendars</div></div>
+  <div class="stat"><div class="num" id="stat-events">{len(events)}</div><div class="label">Total events</div></div>
+  <div class="stat"><div class="num" id="stat-today">{len(today_events)}</div><div class="label">Today</div></div>
 </div>
-<table><thead><tr><th>ID</th><th>Name</th><th>Type</th></tr></thead><tbody>{rows}</tbody></table>
+
+<!-- View: Calendar List -->
+<div id="view-calendars">
+  <div class="toolbar">
+    <h2>Calendars</h2>
+    <button class="btn btn-primary" onclick="showCreateCalendar()">+ New Calendar</button>
+  </div>
+  <table>
+    <thead><tr><th></th><th>Name</th><th>Type</th><th>Events</th><th></th></tr></thead>
+    <tbody id="cal-tbody"></tbody>
+  </table>
+</div>
+
+<!-- View: Calendar Events -->
+<div id="view-events" style="display:none">
+  <div class="toolbar">
+    <button class="btn" onclick="showCalendarList()">← Back</button>
+    <h2 id="events-title">Events</h2>
+    <button class="btn btn-primary" onclick="showCreateEvent()">+ New Event</button>
+  </div>
+  <table>
+    <thead><tr><th>Title</th><th>Start</th><th>End</th><th>Status</th><th>Category</th><th>Source</th><th>Actions</th></tr></thead>
+    <tbody id="events-tbody"></tbody>
+  </table>
+</div>
+
+<!-- Modal: Event Form -->
+<div class="modal-bg" id="modal-event">
+  <div class="modal">
+    <h3 id="event-form-title">New Event</h3>
+    <form id="event-form" onsubmit="return saveEvent(event)">
+      <input type="hidden" id="ef-id">
+      <input type="hidden" id="ef-cal-id">
+      <div class="field">
+        <label>Title</label>
+        <input id="ef-title" required>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Start</label>
+          <input id="ef-start" type="datetime-local">
+        </div>
+        <div class="field">
+          <label>End</label>
+          <input id="ef-end" type="datetime-local">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Category</label>
+          <select id="ef-category">
+            <option value="task">Task</option>
+            <option value="deadline">Deadline</option>
+            <option value="milestone">Milestone</option>
+            <option value="meeting">Meeting</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Status</label>
+          <select id="ef-status">
+            <option value="scheduled">Scheduled</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <textarea id="ef-desc" rows="3"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" onclick="closeModal('modal-event')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal: Calendar Form -->
+<div class="modal-bg" id="modal-calendar">
+  <div class="modal">
+    <h3 id="cal-form-title">New Calendar</h3>
+    <form id="cal-form" onsubmit="return saveCalendar(event)">
+      <input type="hidden" id="cf-id">
+      <div class="field">
+        <label>Name</label>
+        <input id="cf-name" required>
+      </div>
+      <div class="field">
+        <label>Color</label>
+        <input id="cf-color" type="color" value="#3b82f6">
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <textarea id="cf-desc" rows="2"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" onclick="closeModal('modal-calendar')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- Footer links -->
 <div class="links">
   <a href="/docs">API docs</a>
   <a href="/api/events">Events JSON</a>
   <a href="/api/health">Health</a>
 </div>
+
+<script>
+const API = '';
+let currentCalId = null;
+let calendars = [];
+let calEventCounts = {cal_counts_json};
+
+// ── Utilities ──────────────────────────────────────────────────
+function esc(s) {{
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}}
+
+function toast(msg, isError) {{
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => t.className = 'toast', 3000);
+}}
+
+function closeModal(id) {{
+  document.getElementById(id).classList.remove('open');
+}}
+
+function openModal(id) {{
+  document.getElementById(id).classList.add('open');
+}}
+
+async function api(path, opts) {{
+  try {{
+    const resp = await fetch(API + path, opts);
+    if (!resp.ok) {{
+      const err = await resp.json().catch(() => ({{}}));
+      throw new Error(err.detail || `HTTP ${{resp.status}}`);
+    }}
+    return resp.json();
+  }} catch(e) {{
+    toast(e.message, true);
+    throw e;
+  }}
+}}
+
+function fmtDate(s) {{
+  if (!s) return '—';
+  try {{
+    const d = new Date(s);
+    if (isNaN(d)) return esc(s.substring(0, 16).replace('T', ' '));
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {{hour:'2-digit',minute:'2-digit'}});
+  }} catch(_) {{ return esc(s.substring(0, 16)); }}
+}}
+
+function badgeFor(status) {{
+  const cls = {{'scheduled':'badge-scheduled','completed':'badge-completed','cancelled':'badge-cancelled'}}[status] || 'badge-scheduled';
+  return `<span class="badge ${{cls}}">${{esc(status || 'scheduled')}}</span>`;
+}}
+
+// ── Calendar List ──────────────────────────────────────────────
+async function loadCalendars() {{
+  calendars = await api('/api/calendars');
+  renderCalendars();
+  // Refresh stats
+  const h = await api('/api/health');
+  const events = await api('/api/events');
+  const tc = await api('/api/events/today/count');
+  document.getElementById('stat-cals').textContent = calendars.length;
+  document.getElementById('stat-events').textContent = events.length;
+  document.getElementById('stat-today').textContent = tc.count;
+  // Rebuild calEventCounts
+  calEventCounts = {{}};
+  events.forEach(e => {{ calEventCounts[e.calendar_id] = (calEventCounts[e.calendar_id]||0) + 1; }});
+  renderCalendars();
+}}
+
+function renderCalendars() {{
+  const tbody = document.getElementById('cal-tbody');
+  if (!calendars.length) {{
+    tbody.innerHTML = '<tr><td colspan="5"><div class="empty"><div class="empty-icon">\U0001f4c5</div>No calendars yet</div></td></tr>';
+    return;
+  }}
+  tbody.innerHTML = calendars.map(c => `
+    <tr class="cal-row" onclick="drillDown(this.dataset.id,this.dataset.name)" data-id="${{esc(c.id)}}" data-name="${{esc(c.name)}}">
+      <td><span class="cal-color" style="background:${{esc(c.color || '#3b82f6')}}"></span></td>
+      <td>${{esc(c.name)}}</td>
+      <td>${{esc(c.type)}}</td>
+      <td><span class="cal-count">${{calEventCounts[c.id] || 0}}</span></td>
+      <td class="actions" onclick="event.stopPropagation()">
+        <button class="btn btn-sm" onclick="showEditCalendar(this.dataset.id)" data-id="${{esc(c.id)}}">Rename</button>
+        ${{c.type === 'custom' ? `<button class="btn btn-sm btn-danger" onclick="deleteCalendar(this.dataset.id,this.dataset.name)" data-id="${{esc(c.id)}}" data-name="${{esc(c.name)}}">Delete</button>` : ''}}
+      </td>
+    </tr>
+  `).join('');
+}}
+
+function showCalendarList() {{
+  document.getElementById('view-calendars').style.display = '';
+  document.getElementById('view-events').style.display = 'none';
+  currentCalId = null;
+  loadCalendars();
+}}
+
+// ── Calendar CRUD ──────────────────────────────────────────────
+function showCreateCalendar() {{
+  document.getElementById('cal-form-title').textContent = 'New Calendar';
+  document.getElementById('cf-id').value = '';
+  document.getElementById('cf-name').value = '';
+  document.getElementById('cf-color').value = '#3b82f6';
+  document.getElementById('cf-desc').value = '';
+  openModal('modal-calendar');
+}}
+
+function showEditCalendar(calId) {{
+  const cal = calendars.find(c => c.id === calId);
+  if (!cal) return;
+  document.getElementById('cal-form-title').textContent = 'Edit Calendar';
+  document.getElementById('cf-id').value = calId;
+  document.getElementById('cf-name').value = cal.name;
+  document.getElementById('cf-color').value = cal.color || '#3b82f6';
+  document.getElementById('cf-desc').value = cal.description || '';
+  openModal('modal-calendar');
+}}
+
+async function saveCalendar(ev) {{
+  ev.preventDefault();
+  const calId = document.getElementById('cf-id').value;
+  const name = document.getElementById('cf-name').value.trim();
+  const color = document.getElementById('cf-color').value;
+  const description = document.getElementById('cf-desc').value.trim() || null;
+  if (!name) return;
+
+  try {{
+    if (calId) {{
+      await api(`/api/calendars/${{calId}}`, {{
+        method: 'PUT',
+        headers: {{'Content-Type':'application/json'}},
+        body: JSON.stringify({{name, color, description}})
+      }});
+      toast('Calendar updated');
+    }} else {{
+      await api('/api/calendars', {{
+        method: 'POST',
+        headers: {{'Content-Type':'application/json'}},
+        body: JSON.stringify({{name, color, description}})
+      }});
+      toast('Calendar created');
+    }}
+    closeModal('modal-calendar');
+    loadCalendars();
+  }} catch(_) {{}}
+  return false;
+}}
+
+async function deleteCalendar(calId, name) {{
+  if (!confirm(`Delete calendar "${{name}}" and all its events?`)) return;
+  try {{
+    await api(`/api/calendars/${{calId}}`, {{method:'DELETE'}});
+    toast('Calendar deleted');
+    loadCalendars();
+  }} catch(_) {{}}
+}}
+
+// ── Event Browser ──────────────────────────────────────────────
+async function drillDown(calId, calName) {{
+  currentCalId = calId;
+  document.getElementById('view-calendars').style.display = 'none';
+  document.getElementById('view-events').style.display = '';
+  document.getElementById('events-title').textContent = calName + ' — Events';
+  await loadEvents();
+}}
+
+async function loadEvents() {{
+  if (!currentCalId) return;
+  const events = await api(`/api/calendars/${{currentCalId}}/events`);
+  renderEvents(events);
+}}
+
+function renderEvents(events) {{
+  const tbody = document.getElementById('events-tbody');
+  if (!events.length) {{
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">\U0001f4cb</div>No events in this calendar</div></td></tr>';
+    return;
+  }}
+  tbody.innerHTML = events.map(e => `
+    <tr${{e.description ? ` title="${{esc(e.description)}}"` : ''}}>
+      <td>${{esc(e.title)}}</td>
+      <td>${{fmtDate(e.start)}}</td>
+      <td>${{fmtDate(e.end)}}</td>
+      <td>${{badgeFor(e.status)}}</td>
+      <td>${{esc(e.category || 'task')}}</td>
+      <td>${{esc(e.source || 'manual')}}</td>
+      <td class="actions">
+        <button class="btn btn-sm" onclick="showEditEvent(this.dataset.id)" data-id="${{esc(e.id)}}">Edit</button>
+        ${{e.status !== 'completed' ? `<button class="btn btn-sm btn-success" onclick="completeEvent(this.dataset.id)" data-id="${{esc(e.id)}}">Complete</button>` : ''}}
+        ${{e.status !== 'cancelled' ? `<button class="btn btn-sm btn-warning" onclick="cancelEvent(this.dataset.id)" data-id="${{esc(e.id)}}">Cancel</button>` : ''}}
+        <button class="btn btn-sm btn-danger" onclick="deleteEvent(this.dataset.id,this.dataset.title)" data-id="${{esc(e.id)}}" data-title="${{esc(e.title)}}">Delete</button>
+      </td>
+    </tr>
+  `).join('');
+}}
+
+// ── Event CRUD ─────────────────────────────────────────────────
+function isoLocal(s) {{
+  // Convert ISO string to datetime-local value
+  if (!s) return '';
+  return s.substring(0, 16);
+}}
+
+function showCreateEvent() {{
+  document.getElementById('event-form-title').textContent = 'New Event';
+  document.getElementById('ef-id').value = '';
+  document.getElementById('ef-cal-id').value = currentCalId;
+  document.getElementById('ef-title').value = '';
+  document.getElementById('ef-start').value = '';
+  document.getElementById('ef-end').value = '';
+  document.getElementById('ef-category').value = 'task';
+  document.getElementById('ef-status').value = 'scheduled';
+  document.getElementById('ef-desc').value = '';
+  openModal('modal-event');
+}}
+
+async function showEditEvent(eventId) {{
+  try {{
+    const e = await api(`/api/events/${{eventId}}`);
+    document.getElementById('event-form-title').textContent = 'Edit Event';
+    document.getElementById('ef-id').value = e.id;
+    document.getElementById('ef-cal-id').value = e.calendar_id;
+    document.getElementById('ef-title').value = e.title || '';
+    document.getElementById('ef-start').value = isoLocal(e.start);
+    document.getElementById('ef-end').value = isoLocal(e.end);
+    document.getElementById('ef-category').value = e.category || 'task';
+    document.getElementById('ef-status').value = e.status || 'scheduled';
+    document.getElementById('ef-desc').value = e.description || '';
+    openModal('modal-event');
+  }} catch(_) {{}}
+}}
+
+async function saveEvent(ev) {{
+  ev.preventDefault();
+  const eventId = document.getElementById('ef-id').value;
+  const calId = document.getElementById('ef-cal-id').value;
+  const title = document.getElementById('ef-title').value.trim();
+  const start = document.getElementById('ef-start').value;
+  const end = document.getElementById('ef-end').value;
+  const category = document.getElementById('ef-category').value;
+  const status = document.getElementById('ef-status').value;
+  const description = document.getElementById('ef-desc').value;
+  if (!title) return false;
+
+  const payload = {{ title, category, status, description: description || null, all_day: !start.includes('T') }};
+  if (start) payload.start = start;
+  if (end) payload.end = end;
+
+  try {{
+    if (eventId) {{
+      await api(`/api/events/${{eventId}}`, {{
+        method: 'PUT',
+        headers: {{'Content-Type':'application/json'}},
+        body: JSON.stringify(payload)
+      }});
+      toast('Event updated');
+    }} else {{
+      await api(`/api/calendars/${{calId}}/events`, {{
+        method: 'POST',
+        headers: {{'Content-Type':'application/json'}},
+        body: JSON.stringify(payload)
+      }});
+      toast('Event created');
+    }}
+    closeModal('modal-event');
+    loadEvents();
+  }} catch(_) {{}}
+  return false;
+}}
+
+async function deleteEvent(eventId, title) {{
+  if (!confirm(`Delete event "${{title}}"?`)) return;
+  try {{
+    await api(`/api/events/${{eventId}}`, {{method:'DELETE'}});
+    toast('Event deleted');
+    loadEvents();
+  }} catch(_) {{}}
+}}
+
+async function completeEvent(eventId) {{
+  try {{
+    await api(`/api/events/${{eventId}}/complete`, {{method:'POST'}});
+    toast('Event completed');
+    loadEvents();
+  }} catch(_) {{}}
+}}
+
+async function cancelEvent(eventId) {{
+  try {{
+    await api(`/api/events/${{eventId}}/cancel`, {{method:'POST'}});
+    toast('Event cancelled');
+    loadEvents();
+  }} catch(_) {{}}
+}}
+
+// ── Modal keyboard & click-outside handlers ───────────────────
+document.addEventListener('keydown', function(e) {{
+  if (e.key === 'Escape') {{
+    document.querySelectorAll('.modal-bg.open').forEach(m => m.classList.remove('open'));
+  }}
+}});
+document.querySelectorAll('.modal-bg').forEach(bg => {{
+  bg.addEventListener('click', function(e) {{
+    if (e.target === bg) bg.classList.remove('open');
+  }});
+}});
+
+// ── Init ───────────────────────────────────────────────────────
+renderCalendars();
+// Bootstrap calendar data from server-rendered JSON
+calendars = {cals_json};
+renderCalendars();
+</script>
 </body></html>"""
+
     return HTMLResponse(html)
 
 
@@ -511,7 +1014,8 @@ def list_calendars():
 def create_calendar(body: CalendarCreate):
     try:
         cal_id = f"custom-{uuid.uuid4().hex[:8]}"
-        return _ensure_calendar(cal_id, body.name, "custom", color=body.color)
+        return _ensure_calendar(cal_id, body.name, "custom", color=body.color,
+                                description=body.description)
     except Exception as exc:
         log.error("create_calendar: %s: %s", type(exc).__name__, exc)
         raise HTTPException(503, "Storage temporarily unavailable — retry")
@@ -547,6 +1051,30 @@ def delete_calendar(cal_id: str):
         raise
     except Exception as exc:
         log.error("delete_calendar(%s): %s: %s", cal_id, type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
+
+
+@app.put("/api/calendars/{cal_id}")
+def update_calendar(cal_id: str, body: CalendarUpdate):
+    """Rename or recolour a calendar."""
+    try:
+        with _lock:
+            cals = _load_calendars()
+            for c in cals:
+                if c["id"] == cal_id:
+                    if body.name is not None:
+                        c["name"] = body.name
+                    if body.color is not None:
+                        c["color"] = body.color
+                    if body.description is not None:
+                        c["description"] = body.description
+                    _atomic_write(CALENDARS_FILE, cals)
+                    return c
+        raise HTTPException(404, "Calendar not found")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("update_calendar(%s): %s: %s", cal_id, type(exc).__name__, exc)
         raise HTTPException(503, "Storage temporarily unavailable — retry")
 
 
@@ -838,6 +1366,27 @@ def cancel_event(event_id: str):
         raise
     except Exception as exc:
         log.error("cancel_event(%s): %s: %s", event_id, type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable — retry")
+    raise HTTPException(404, "Event not found")
+
+
+@app.put("/api/events/{event_id}")
+def update_event(event_id: str, body: EventUpdate):
+    """Update arbitrary fields on an event."""
+    try:
+        with _lock:
+            events = _load_events()
+            for e in events:
+                if e["id"] == event_id:
+                    updates = body.model_dump(exclude_none=True)
+                    e.update(updates)
+                    e["updated_at"] = _now_iso()
+                    _atomic_write(EVENTS_FILE, events)
+                    return e
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("update_event(%s): %s: %s", event_id, type(exc).__name__, exc)
         raise HTTPException(503, "Storage temporarily unavailable — retry")
     raise HTTPException(404, "Event not found")
 
