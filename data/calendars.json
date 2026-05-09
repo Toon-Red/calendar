@@ -142,5 +142,21 @@
     "project_id": "warehouse-robot-sim",
     "color": "#f97316",
     "created_at": "2026-04-25T16:01:38.061816+00:00"
+  },
+  {
+    "id": "project-proj-x",
+    "name": "proj-x",
+    "type": "project",
+    "project_id": "proj-x",
+    "color": "#10b981",
+    "created_at": "2026-05-03T23:15:00.086051+00:00"
+  },
+  {
+    "id": "project-interview-prep",
+    "name": "Interview Prep",
+    "type": "project",
+    "project_id": "interview-prep",
+    "color": "#f59e0b",
+    "created_at": "2026-05-06T04:57:07.968965+00:00"
   }
 ]

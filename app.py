@@ -319,10 +319,21 @@ def _ensure_calendar(cal_id: str, name: str, ctype: str, *,
                      project_id: Optional[str] = None,
                      color: Optional[str] = None,
                      description: Optional[str] = None) -> dict:
-    """Idempotently create a calendar."""
+    """Idempotently create a calendar.
+
+    If a calendar with *cal_id* already exists, its display name is
+    refreshed when the caller supplies a different *name*.  This lets
+    ``_bootstrap()`` correct stale names (e.g. a calendar auto-created
+    by ``create_calendar_event`` with a raw slug like 'minecraft-server'
+    gets its proper Pipeline Dashboard display name on the next restart).
+    """
     cals = _load_calendars()
     for c in cals:
         if c["id"] == cal_id:
+            # Refresh display name if the authoritative source changed.
+            if name and c.get("name") != name:
+                c["name"] = name
+                _save_calendars(cals)
             return c
     cal = {
         "id": cal_id,
@@ -426,11 +437,34 @@ def _bootstrap():
         with _reuse_opener.open(req, timeout=3) as r:
             data = json.loads(r.read())
         projects = data.get("projects", []) if isinstance(data, dict) else data
+        valid_pids: set[str] = set()
         for p in projects:
             pid = p.get("project_id")
             name = p.get("name") or pid
             if pid:
+                valid_pids.add(pid)
                 _ensure_calendar(f"project-{pid}", name, "project", project_id=pid)
+
+        # Prune project calendars whose project_id is NOT in Pipeline
+        # Dashboard.  This cleans up test-fixture leaks (proj1, proj2)
+        # and stale entries from projects that have been removed.
+        cals = _load_calendars()
+        stale = [c for c in cals
+                 if c.get("type") == "project"
+                 and c.get("project_id")
+                 and c["project_id"] not in valid_pids]
+        if stale:
+            stale_ids = {c["id"] for c in stale}
+            log.info("Pruning %d stale project calendars: %s",
+                     len(stale), ", ".join(sorted(stale_ids)))
+            _save_calendars([c for c in cals if c["id"] not in stale_ids])
+            # Also drop any orphaned events on those calendars.
+            events = _load_events()
+            orphaned = [e for e in events if e.get("calendar_id") in stale_ids]
+            if orphaned:
+                log.info("Dropping %d orphaned events from pruned calendars", len(orphaned))
+                _save_events([e for e in events if e.get("calendar_id") not in stale_ids])
+
         log.info("Bootstrapped %d project calendars", len(projects))
     except Exception as e:
         log.warning("Could not fetch projects from Pipeline Dashboard: %s", e)
@@ -1164,7 +1198,20 @@ def create_calendar_event(cal_id: str, body: EventCreate):
         if not _calendar_exists(cal_id):
             if cal_id.startswith("project-"):
                 pid = cal_id.removeprefix("project-")
-                _ensure_calendar(cal_id, pid, "project", project_id=pid)
+                # Try to fetch the proper display name from Pipeline
+                # Dashboard so the calendar isn't created with the raw
+                # slug (e.g. 'minecraft-server' instead of 'Minecraft
+                # Server').  Falls back to the slug on any error.
+                display_name = pid
+                try:
+                    req = urllib.request.Request(
+                        f"{PIPELINE_DASHBOARD_URL}/api/projects/{pid}")
+                    with _reuse_opener.open(req, timeout=2) as r:
+                        pdata = json.loads(r.read())
+                    display_name = pdata.get("name") or pid
+                except Exception:
+                    pass
+                _ensure_calendar(cal_id, display_name, "project", project_id=pid)
             else:
                 raise HTTPException(404, "Calendar not found")
 

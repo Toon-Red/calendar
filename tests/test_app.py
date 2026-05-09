@@ -609,6 +609,195 @@ def test_storage_isolation_no_writes_to_live_store():
     assert before == after, "Live events.json was modified during test"
 
 
+# ── Bootstrap: stale project calendar pruning ────────────────────────────
+
+def test_bootstrap_prunes_stale_project_calendars(monkeypatch, tmp_path):
+    """_bootstrap() should remove project calendars whose project_id is
+    not present in the Pipeline Dashboard project list.  This prevents
+    test fixtures (proj1, proj2) and stale entries from leaking into the
+    calendar list.  Regression guard for the 'proj1/proj2/minecraft-server'
+    leakage incident."""
+    import app as cal_app
+
+    # Pre-seed calendars with one legitimate and two stale entries.
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-real", "name": "Real Project", "type": "project",
+         "project_id": "real", "color": "#10b981",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-proj1", "name": "proj1", "type": "project",
+         "project_id": "proj1", "color": "#6366f1",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-proj2", "name": "proj2", "type": "project",
+         "project_id": "proj2", "color": "#84cc16",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+    cal_app._save_events([])
+
+    # Simulate Pipeline Dashboard returning only 'real' as a valid project.
+    import json
+    fake_pd_response = json.dumps(
+        {"projects": [{"project_id": "real", "name": "Real Project"}]}
+    ).encode()
+
+    class FakeResponse:
+        def read(self):
+            return fake_pd_response
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+
+    monkeypatch.setattr(cal_app._reuse_opener, "open",
+                        lambda *a, **kw: FakeResponse())
+
+    cal_app._bootstrap()
+
+    cals = cal_app._load_calendars()
+    cal_ids = {c["id"] for c in cals}
+    assert "project-real" in cal_ids, "legitimate project calendar was wrongly pruned"
+    assert "personal" in cal_ids, "personal calendar was wrongly pruned"
+    assert "project-proj1" not in cal_ids, "stale proj1 was not pruned"
+    assert "project-proj2" not in cal_ids, "stale proj2 was not pruned"
+
+
+def test_bootstrap_updates_stale_display_names(monkeypatch, tmp_path):
+    """_bootstrap() should correct display names for existing project
+    calendars (e.g. 'minecraft-server' → 'Minecraft Server') when the
+    Pipeline Dashboard provides a different name."""
+    import app as cal_app
+    import json
+
+    # Pre-seed with a stale name (lowercase slug).
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-minecraft-server", "name": "minecraft-server",
+         "type": "project", "project_id": "minecraft-server",
+         "color": "#3b82f6", "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+    cal_app._save_events([])
+
+    fake_pd_response = json.dumps(
+        {"projects": [
+            {"project_id": "minecraft-server", "name": "Minecraft Server"},
+        ]}
+    ).encode()
+
+    class FakeResponse:
+        def read(self):
+            return fake_pd_response
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+
+    monkeypatch.setattr(cal_app._reuse_opener, "open",
+                        lambda *a, **kw: FakeResponse())
+
+    cal_app._bootstrap()
+
+    cals = cal_app._load_calendars()
+    mc_cal = next(c for c in cals if c["id"] == "project-minecraft-server")
+    assert mc_cal["name"] == "Minecraft Server", (
+        f"Expected 'Minecraft Server' but got '{mc_cal['name']}'"
+    )
+
+
+def test_bootstrap_prunes_orphaned_events(monkeypatch, tmp_path):
+    """When stale project calendars are pruned, their orphaned events
+    should also be removed."""
+    import app as cal_app
+    import json
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-real", "name": "Real", "type": "project",
+         "project_id": "real", "color": "#10b981",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-stale", "name": "stale", "type": "project",
+         "project_id": "stale", "color": "#ef4444",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+    cal_app._save_events([
+        {"id": "keep", "title": "Keep", "start": "2030-01-01",
+         "calendar_id": "project-real"},
+        {"id": "orphan", "title": "Orphan", "start": "2030-01-01",
+         "calendar_id": "project-stale"},
+    ])
+
+    fake_pd_response = json.dumps(
+        {"projects": [{"project_id": "real", "name": "Real"}]}
+    ).encode()
+
+    class FakeResponse:
+        def read(self):
+            return fake_pd_response
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+
+    monkeypatch.setattr(cal_app._reuse_opener, "open",
+                        lambda *a, **kw: FakeResponse())
+
+    cal_app._bootstrap()
+
+    events = cal_app._load_events()
+    event_ids = {e["id"] for e in events}
+    assert "keep" in event_ids
+    assert "orphan" not in event_ids
+
+
+def test_bootstrap_skips_pruning_when_pd_unreachable(monkeypatch, tmp_path):
+    """If Pipeline Dashboard is unreachable, _bootstrap() must NOT prune
+    any project calendars — it should gracefully skip the sync."""
+    import app as cal_app
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-safe", "name": "Safe Project", "type": "project",
+         "project_id": "safe", "color": "#10b981",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+    cal_app._save_events([])
+
+    def _fail_open(*a, **kw):
+        raise ConnectionRefusedError("PD is down")
+
+    monkeypatch.setattr(cal_app._reuse_opener, "open", _fail_open)
+
+    cal_app._bootstrap()
+
+    cals = cal_app._load_calendars()
+    cal_ids = {c["id"] for c in cals}
+    assert "project-safe" in cal_ids, (
+        "project calendar was wrongly pruned when PD was unreachable"
+    )
+
+
+def test_no_test_fixtures_in_live_calendars():
+    """Regression: the live calendars.json must not contain test fixture
+    entries (proj1, proj2) or lowercase-slug project names that indicate
+    auto-creation without a PD lookup."""
+    from pathlib import Path
+    import json
+
+    calendars_file = Path(__file__).resolve().parent.parent / "data" / "calendars.json"
+    cals = json.loads(calendars_file.read_text(encoding="utf-8"))
+    cal_ids = {c["id"] for c in cals}
+    # These are known test fixtures that should never appear.
+    assert "project-proj1" not in cal_ids, "test fixture proj1 leaked into calendars.json"
+    assert "project-proj2" not in cal_ids, "test fixture proj2 leaked into calendars.json"
+
+
 # ── Today overlap logic ────────────────────────────────────────────────────
 
 def test_event_overlaps_date_single_day():
