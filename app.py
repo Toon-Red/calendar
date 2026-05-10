@@ -496,6 +496,58 @@ def health():
     }
 
 
+@app.get("/api/ready")
+def readiness():
+    """Deep readiness check — verifies the data layer is accessible.
+
+    Unlike /api/health (which confirms the HTTP server is up), this endpoint
+    actually reads calendars and events to confirm the service can serve data.
+    Used by the EOD UI playtest and watchdog --json to distinguish between
+    'TCP port is open' and 'service is fully operational'.
+    """
+    checks: dict[str, str] = {}
+    ok = True
+
+    # Check calendars file
+    try:
+        cals = _load_calendars()
+        checks["calendars"] = f"ok ({len(cals)} loaded)"
+    except Exception as exc:
+        checks["calendars"] = f"error: {exc}"
+        ok = False
+
+    # Check events file
+    try:
+        events = _load_events()
+        checks["events"] = f"ok ({len(events)} loaded)"
+    except Exception as exc:
+        checks["events"] = f"error: {exc}"
+        ok = False
+
+    # Check data directory is writable
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        test_file = DATA_DIR / ".readiness_probe"
+        test_file.write_text("ok", encoding="utf-8")
+        test_file.unlink()
+        checks["data_writable"] = "ok"
+    except Exception as exc:
+        checks["data_writable"] = f"error: {exc}"
+        ok = False
+
+    status_code = 200 if ok else 503
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "ready": ok,
+            "checks": checks,
+            "version": "0.2.0",
+            "started_at": _STARTED_AT.isoformat() if _STARTED_AT else None,
+        },
+    )
+
+
 @app.get("/")
 def root():
     """Landing page for the launcher BrowserView.

@@ -59,6 +59,34 @@ def test_health_includes_uptime():
     assert data["uptime_seconds"] >= 0
 
 
+# ── Readiness ──────────────────────────────────────────────────────────────
+
+def test_ready_returns_200_when_healthy():
+    """Readiness endpoint should return 200 with ready=True when data layer is OK."""
+    resp = client.get("/api/ready")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ready"] is True
+    assert "checks" in data
+    assert "calendars" in data["checks"]
+    assert "events" in data["checks"]
+    assert "data_writable" in data["checks"]
+
+
+def test_ready_includes_version():
+    """Readiness endpoint should include version for consistency."""
+    resp = client.get("/api/ready")
+    data = resp.json()
+    assert data["version"] == "0.2.0"
+
+
+def test_ready_includes_started_at():
+    """Readiness endpoint reports started_at for EOD diagnostics."""
+    resp = client.get("/api/ready")
+    data = resp.json()
+    assert "started_at" in data
+
+
 # ── Calendars CRUD ──────────────────────────────────────────────────────────
 
 def test_list_calendars():

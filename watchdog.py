@@ -24,6 +24,7 @@ import struct as _struct
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 logging.basicConfig(
@@ -60,6 +61,9 @@ class _WatchdogHTTPConnection(http.client.HTTPConnection):
 
 # ── Core functions ─────────────────────────────────────────────────────────
 
+READY_PATH = "/api/ready"
+
+
 def check_health(host: str = SERVICE_HOST, port: int = SERVICE_PORT,
                  timeout: float = 5.0) -> dict | None:
     """Probe /api/health. Returns parsed JSON on success, None on failure."""
@@ -72,6 +76,22 @@ def check_health(host: str = SERVICE_HOST, port: int = SERVICE_PORT,
             conn.close()
             return body
         conn.close()
+    except (OSError, http.client.HTTPException, json.JSONDecodeError):
+        pass
+    return None
+
+
+def check_ready(host: str = SERVICE_HOST, port: int = SERVICE_PORT,
+                timeout: float = 5.0) -> dict | None:
+    """Probe /api/ready (deep readiness). Returns parsed JSON on success, None on failure."""
+    try:
+        conn = _WatchdogHTTPConnection(host, port, timeout=timeout)
+        conn.request("GET", READY_PATH)
+        resp = conn.getresponse()
+        body = json.loads(resp.read())
+        conn.close()
+        # /api/ready returns 200 or 503; both carry useful JSON
+        return body
     except (OSError, http.client.HTTPException, json.JSONDecodeError):
         pass
     return None
@@ -150,6 +170,63 @@ def ensure_running(host: str = SERVICE_HOST, port: int = SERVICE_PORT,
     return False
 
 
+def status_report(host: str = SERVICE_HOST, port: int = SERVICE_PORT,
+                  check_only: bool = False, retries: int = 10) -> dict:
+    """Run ensure_running and produce a structured status report.
+
+    Returns a dict suitable for JSON serialization, used by the EOD UI
+    playtest and other automation to get a machine-readable service status.
+    """
+    report: dict = {
+        "service": "dream-calendar",
+        "host": host,
+        "port": port,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # First, check liveness
+    health = check_health(host, port)
+    was_running = health is not None and health.get("status") == "ok"
+    report["was_running"] = was_running
+
+    if not was_running and not check_only:
+        # Attempt auto-start
+        proc = start_service(host, port)
+        if proc is None:
+            report["action"] = "start_failed"
+            report["healthy"] = False
+            report["ready"] = False
+            return report
+        report["action"] = "started"
+        report["pid"] = proc.pid
+        if not wait_for_healthy(host, port, retries=retries):
+            report["healthy"] = False
+            report["ready"] = False
+            return report
+        health = check_health(host, port)
+    elif not was_running:
+        report["action"] = "check_only"
+        report["healthy"] = False
+        report["ready"] = False
+        return report
+    else:
+        report["action"] = "none_needed"
+
+    report["healthy"] = True
+    report["health"] = health
+
+    # Deep readiness check
+    ready = check_ready(host, port)
+    if ready and ready.get("ready"):
+        report["ready"] = True
+        report["readiness"] = ready
+    else:
+        report["ready"] = False
+        report["readiness"] = ready
+
+    return report
+
+
 # ── CLI entrypoint ─────────────────────────────────────────────────────────
 
 def main():
@@ -164,6 +241,8 @@ def main():
                     help="Check only — don't attempt to start the service")
     ap.add_argument("--retries", type=int, default=10,
                     help="Max health-check retries after starting (default: %(default)s)")
+    ap.add_argument("--json", action="store_true", dest="json_output",
+                    help="Output structured JSON report (for EOD playtest integration)")
     ap.add_argument("--verbose", "-v", action="store_true",
                     help="Enable debug logging")
     args = ap.parse_args()
@@ -171,13 +250,24 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    healthy = ensure_running(
-        host=args.host,
-        port=args.port,
-        check_only=args.check,
-        retries=args.retries,
-    )
-    sys.exit(0 if healthy else 1)
+    if args.json_output:
+        # Structured output mode for EOD playtest and other automation
+        report = status_report(
+            host=args.host,
+            port=args.port,
+            check_only=args.check,
+            retries=args.retries,
+        )
+        print(json.dumps(report, indent=2))
+        sys.exit(0 if report.get("healthy") and report.get("ready") else 1)
+    else:
+        healthy = ensure_running(
+            host=args.host,
+            port=args.port,
+            check_only=args.check,
+            retries=args.retries,
+        )
+        sys.exit(0 if healthy else 1)
 
 
 if __name__ == "__main__":
