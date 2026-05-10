@@ -953,6 +953,49 @@ def test_landing_page_today_matches_api(monkeypatch):
     assert resp_count.json()["count"] == 2
 
 
+def test_filter_events_date_uses_overlap(monkeypatch):
+    """GET /api/events?date=X must use the canonical overlap logic, not
+    start-date-only matching.  This ensures the standup count matches the
+    Calendar landing page and /api/events/today — the bug that caused three
+    different 'events today' numbers (PD task: standup count contradicts
+    Calendar service)."""
+    import app as cal_app
+    from app import _today_iso
+    today = _today_iso()
+    from datetime import date, timedelta
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+
+    fake_events = [
+        # Single-day event starting today — should match
+        {"id": "single-today", "title": "Single day today",
+         "start": today, "end": None, "calendar_id": "personal"},
+        # Multi-day event spanning into today — should match
+        {"id": "multi-spans", "title": "Multi-day spanning today",
+         "start": yesterday, "end": tomorrow, "calendar_id": "personal"},
+        # Event that ended yesterday — should NOT match
+        {"id": "ended-yesterday", "title": "Ended yesterday",
+         "start": "2026-01-01", "end": yesterday, "calendar_id": "personal"},
+        # Event starting tomorrow — should NOT match
+        {"id": "starts-tomorrow", "title": "Starts tomorrow",
+         "start": tomorrow, "end": None, "calendar_id": "personal"},
+    ]
+    monkeypatch.setattr(cal_app, "_load_events", lambda: list(fake_events))
+
+    # /api/events?date=today must agree with /api/events/today
+    resp_date = client.get(f"/api/events?date={today}")
+    resp_today = client.get("/api/events/today")
+    assert resp_date.status_code == 200
+    assert resp_today.status_code == 200
+
+    ids_date = sorted(e["id"] for e in resp_date.json())
+    ids_today = sorted(e["id"] for e in resp_today.json())
+    assert ids_date == ["multi-spans", "single-today"], \
+        f"/api/events?date= returned {ids_date}; expected overlap-aware results"
+    assert ids_date == ids_today, \
+        f"/api/events?date= ({ids_date}) disagrees with /api/events/today ({ids_today})"
+
+
 # ── Calendar Update (PUT) ─────────────────────────────────────────────────
 
 def test_update_calendar_rename():

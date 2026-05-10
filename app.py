@@ -1323,7 +1323,7 @@ def _filter_events(
     if calendar_id:
         events = [e for e in events if e.get("calendar_id") == calendar_id]
     if date:
-        events = [e for e in events if _date_only(e["start"]) == date]
+        events = [e for e in events if _event_overlaps_date(e, date)]
     if from_date:
         events = [e for e in events if _date_only(e["start"]) >= from_date]
     if to:
