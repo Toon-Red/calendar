@@ -1503,3 +1503,389 @@ def test_calendar_events_sorted_by_start():
     finally:
         client.delete(f"/api/events/{eid_late}")
         client.delete(f"/api/events/{eid_early}")
+
+
+# ── Archived Calendars (deprecated project hiding) ────────────────────────
+
+
+def test_list_calendars_excludes_archived_by_default(monkeypatch):
+    """GET /api/calendars (default) hides calendars with archived=true."""
+    import app as cal_app
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-active", "name": "Active", "type": "project",
+         "project_id": "active", "color": "#10b981", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-deprecated", "name": "Deprecated", "type": "project",
+         "project_id": "deprecated", "color": "#ef4444", "archived": True,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+
+    resp = client.get("/api/calendars")
+    assert resp.status_code == 200
+    cal_ids = {c["id"] for c in resp.json()}
+    assert "personal" in cal_ids
+    assert "project-active" in cal_ids
+    assert "project-deprecated" not in cal_ids
+
+
+def test_list_calendars_includes_archived_when_requested(monkeypatch):
+    """GET /api/calendars?include_archived=true shows everything."""
+    import app as cal_app
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-hidden", "name": "Hidden", "type": "project",
+         "project_id": "hidden", "color": "#ef4444", "archived": True,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+
+    resp = client.get("/api/calendars?include_archived=true")
+    assert resp.status_code == 200
+    cal_ids = {c["id"] for c in resp.json()}
+    assert "personal" in cal_ids
+    assert "project-hidden" in cal_ids
+
+
+def test_list_calendars_handles_missing_archived_field(monkeypatch):
+    """Calendars without an explicit archived field default to visible."""
+    import app as cal_app
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-old", "name": "Old Format", "type": "project",
+         "project_id": "old", "color": "#f59e0b",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+
+    resp = client.get("/api/calendars")
+    assert resp.status_code == 200
+    cal_ids = {c["id"] for c in resp.json()}
+    assert "personal" in cal_ids
+    assert "project-old" in cal_ids
+
+
+def test_archive_calendar_endpoint():
+    """POST /api/calendars/{id}/archive sets archived=true."""
+    import app as cal_app
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-test", "name": "Test", "type": "project",
+         "project_id": "test", "color": "#10b981", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+
+    resp = client.post("/api/calendars/project-test/archive")
+    assert resp.status_code == 200
+    assert resp.json()["archived"] is True
+
+    # Verify it's now hidden from default listing
+    resp = client.get("/api/calendars")
+    cal_ids = {c["id"] for c in resp.json()}
+    assert "project-test" not in cal_ids
+
+    # But visible with include_archived
+    resp = client.get("/api/calendars?include_archived=true")
+    cal_ids = {c["id"] for c in resp.json()}
+    assert "project-test" in cal_ids
+
+
+def test_unarchive_calendar_endpoint():
+    """POST /api/calendars/{id}/unarchive sets archived=false."""
+    import app as cal_app
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-revived", "name": "Revived", "type": "project",
+         "project_id": "revived", "color": "#10b981", "archived": True,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+
+    # Should be hidden initially
+    resp = client.get("/api/calendars")
+    assert "project-revived" not in {c["id"] for c in resp.json()}
+
+    # Unarchive it
+    resp = client.post("/api/calendars/project-revived/unarchive")
+    assert resp.status_code == 200
+    assert resp.json()["archived"] is False
+
+    # Now visible in default listing
+    resp = client.get("/api/calendars")
+    cal_ids = {c["id"] for c in resp.json()}
+    assert "project-revived" in cal_ids
+
+
+def test_archive_nonexistent_calendar():
+    """POST archive on a missing calendar returns 404."""
+    resp = client.post("/api/calendars/nonexistent-xyz/archive")
+    assert resp.status_code == 404
+
+
+def test_update_calendar_archived_via_put():
+    """PUT /api/calendars/{id} can set archived field directly."""
+    import app as cal_app
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-put-test", "name": "Put Test", "type": "project",
+         "project_id": "put-test", "color": "#10b981", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+
+    resp = client.put("/api/calendars/project-put-test", json={"archived": True})
+    assert resp.status_code == 200
+    assert resp.json()["archived"] is True
+    assert resp.json()["name"] == "Put Test"  # unchanged
+
+
+def test_ensure_calendar_sets_archived_on_create(monkeypatch):
+    """_ensure_calendar with archived=True creates a hidden calendar."""
+    import app as cal_app
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+
+    cal = cal_app._ensure_calendar(
+        "project-new-archived", "New Archived", "project",
+        project_id="new-archived", archived=True)
+    assert cal["archived"] is True
+
+    # Verify in storage
+    cals = cal_app._load_calendars()
+    found = next(c for c in cals if c["id"] == "project-new-archived")
+    assert found["archived"] is True
+
+
+def test_ensure_calendar_syncs_archived_on_existing(monkeypatch):
+    """_ensure_calendar updates archived flag on an existing calendar."""
+    import app as cal_app
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-sync", "name": "Sync Test", "type": "project",
+         "project_id": "sync", "color": "#10b981", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+
+    # Call with archived=True — should update the existing calendar
+    cal = cal_app._ensure_calendar(
+        "project-sync", "Sync Test", "project",
+        project_id="sync", archived=True)
+    assert cal["archived"] is True
+
+    # Verify persisted
+    cals = cal_app._load_calendars()
+    found = next(c for c in cals if c["id"] == "project-sync")
+    assert found["archived"] is True
+
+
+def test_bootstrap_archives_hidden_pd_projects(monkeypatch, tmp_path):
+    """_bootstrap() should set archived=true for PD projects with hidden=true."""
+    import app as cal_app
+    import json
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-active", "name": "Active", "type": "project",
+         "project_id": "active", "color": "#10b981", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-deprecated", "name": "Old Deprecated", "type": "project",
+         "project_id": "deprecated", "color": "#ef4444", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+    cal_app._save_events([])
+
+    fake_pd_response = json.dumps({"projects": [
+        {"project_id": "active", "name": "Active Project", "hidden": False},
+        {"project_id": "deprecated", "name": "Deprecated Project", "hidden": True},
+    ]}).encode()
+
+    class FakeResponse:
+        def read(self):
+            return fake_pd_response
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+
+    monkeypatch.setattr(cal_app._reuse_opener, "open",
+                        lambda *a, **kw: FakeResponse())
+
+    cal_app._bootstrap()
+
+    cals = cal_app._load_calendars()
+    active = next(c for c in cals if c["id"] == "project-active")
+    deprecated = next(c for c in cals if c["id"] == "project-deprecated")
+    assert active.get("archived", False) is False
+    assert deprecated["archived"] is True
+
+
+def test_bootstrap_unarchives_when_pd_unhides(monkeypatch, tmp_path):
+    """If a PD project was hidden but is now visible, bootstrap unarchives it."""
+    import app as cal_app
+    import json
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6",
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-revived", "name": "Revived", "type": "project",
+         "project_id": "revived", "color": "#10b981", "archived": True,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+    cal_app._save_events([])
+
+    fake_pd_response = json.dumps({"projects": [
+        {"project_id": "revived", "name": "Revived Project", "hidden": False},
+    ]}).encode()
+
+    class FakeResponse:
+        def read(self):
+            return fake_pd_response
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+
+    monkeypatch.setattr(cal_app._reuse_opener, "open",
+                        lambda *a, **kw: FakeResponse())
+
+    cal_app._bootstrap()
+
+    cals = cal_app._load_calendars()
+    revived = next(c for c in cals if c["id"] == "project-revived")
+    assert revived["archived"] is False
+
+
+def test_landing_page_hides_archived_calendars(monkeypatch):
+    """The landing page SPA should not render archived calendars."""
+    import app as cal_app
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-visible", "name": "Visible Project", "type": "project",
+         "project_id": "visible", "color": "#10b981", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-hidden", "name": "Hidden Project", "type": "project",
+         "project_id": "hidden", "color": "#ef4444", "archived": True,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+    # The visible calendar name should appear in the embedded JSON
+    assert "Visible Project" in html
+    # The archived calendar should NOT appear in the embedded JSON
+    assert "Hidden Project" not in html
+
+
+def test_deprecated_projects_not_in_live_calendars():
+    """Regression: the live calendars.json must have archived=true for
+    the known deprecated projects (AI Build Advisor, LoL Build Advisor,
+    PLC Learning Environment)."""
+    from pathlib import Path
+    import json
+
+    calendars_file = Path(__file__).resolve().parent.parent / "data" / "calendars.json"
+    cals = json.loads(calendars_file.read_text(encoding="utf-8"))
+
+    deprecated_ids = {
+        "project-ai-build-advisor",
+        "project-lol-build-advisor",
+        "project-plc-learning-env",
+    }
+    for cal in cals:
+        if cal["id"] in deprecated_ids:
+            assert cal.get("archived") is True, (
+                f"{cal['id']} should be archived but has archived={cal.get('archived')}"
+            )
+
+    # Also verify they would NOT appear in the default /api/calendars listing
+    visible_ids = {c["id"] for c in cals if not c.get("archived", False)}
+    for dep_id in deprecated_ids:
+        assert dep_id not in visible_ids, (
+            f"{dep_id} is still visible in default calendar listing"
+        )
+
+
+def test_get_single_archived_calendar_still_works(monkeypatch):
+    """GET /api/calendars/{id} should still return an archived calendar
+    when accessed directly — only the list endpoint hides them."""
+    import app as cal_app
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-archived", "name": "Archived", "type": "project",
+         "project_id": "archived", "color": "#ef4444", "archived": True,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+
+    # Hidden from list
+    resp = client.get("/api/calendars")
+    assert "project-archived" not in {c["id"] for c in resp.json()}
+
+    # But accessible directly
+    resp = client.get("/api/calendars/project-archived")
+    assert resp.status_code == 200
+    assert resp.json()["id"] == "project-archived"
+    assert resp.json()["archived"] is True
+
+
+def test_archived_calendar_events_still_accessible(monkeypatch):
+    """Events on an archived calendar should still be accessible via
+    the events API — archiving hides the calendar, not its data."""
+    import app as cal_app
+
+    cal_app._save_calendars([
+        {"id": "personal", "name": "Personal", "type": "personal",
+         "project_id": None, "color": "#3b82f6", "archived": False,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+        {"id": "project-old", "name": "Old Project", "type": "project",
+         "project_id": "old", "color": "#ef4444", "archived": True,
+         "created_at": "2026-01-01T00:00:00+00:00"},
+    ])
+
+    # Create an event on the archived calendar
+    resp = client.post("/api/calendars/project-old/events", json={
+        "title": "Legacy Event",
+        "start": "2030-01-01",
+    })
+    assert resp.status_code == 201
+    event_id = resp.json()["id"]
+
+    # Event is still accessible
+    resp = client.get(f"/api/events/{event_id}")
+    assert resp.status_code == 200
+    assert resp.json()["title"] == "Legacy Event"
+
+    # Calendar events endpoint still works
+    resp = client.get("/api/calendars/project-old/events")
+    assert resp.status_code == 200
+    assert any(e["id"] == event_id for e in resp.json())

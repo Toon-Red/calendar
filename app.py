@@ -277,6 +277,7 @@ class CalendarUpdate(BaseModel):
     name: Optional[str] = None
     color: Optional[str] = None
     description: Optional[str] = None
+    archived: Optional[bool] = None
 
 
 class EventCreate(BaseModel):
@@ -318,7 +319,8 @@ def _today_iso() -> str:
 def _ensure_calendar(cal_id: str, name: str, ctype: str, *,
                      project_id: Optional[str] = None,
                      color: Optional[str] = None,
-                     description: Optional[str] = None) -> dict:
+                     description: Optional[str] = None,
+                     archived: bool = False) -> dict:
     """Idempotently create a calendar.
 
     If a calendar with *cal_id* already exists, its display name is
@@ -326,13 +328,25 @@ def _ensure_calendar(cal_id: str, name: str, ctype: str, *,
     ``_bootstrap()`` correct stale names (e.g. a calendar auto-created
     by ``create_calendar_event`` with a raw slug like 'minecraft-server'
     gets its proper Pipeline Dashboard display name on the next restart).
+
+    The *archived* flag controls visibility: archived calendars are hidden
+    from the default ``GET /api/calendars`` response (use ``include_archived=true``
+    to see them).  During bootstrap, this flag is synced from the Pipeline
+    Dashboard project's ``hidden`` field.
     """
     cals = _load_calendars()
     for c in cals:
         if c["id"] == cal_id:
+            changed = False
             # Refresh display name if the authoritative source changed.
             if name and c.get("name") != name:
                 c["name"] = name
+                changed = True
+            # Sync archived flag from authoritative source.
+            if c.get("archived", False) != archived:
+                c["archived"] = archived
+                changed = True
+            if changed:
                 _save_calendars(cals)
             return c
     cal = {
@@ -342,6 +356,7 @@ def _ensure_calendar(cal_id: str, name: str, ctype: str, *,
         "project_id": project_id,
         "color": color or DEFAULT_PALETTE[len(cals) % len(DEFAULT_PALETTE)],
         "description": description,
+        "archived": archived,
         "created_at": _now_iso(),
     }
     cals.append(cal)
@@ -443,7 +458,13 @@ def _bootstrap():
             name = p.get("name") or pid
             if pid:
                 valid_pids.add(pid)
-                _ensure_calendar(f"project-{pid}", name, "project", project_id=pid)
+                # Sync the archived flag from PD's project visibility.
+                # PD marks deprecated/retired projects with hidden=true;
+                # we mirror that as archived=true so they don't clutter
+                # the calendar list or Dream's pills.
+                is_archived = bool(p.get("hidden", False))
+                _ensure_calendar(f"project-{pid}", name, "project",
+                                 project_id=pid, archived=is_archived)
 
         # Prune project calendars whose project_id is NOT in Pipeline
         # Dashboard.  This cleans up test-fixture leaks (proj1, proj2)
@@ -558,7 +579,9 @@ def root():
       - Full CRUD: create, edit, delete events; rename/delete calendars
     """
     from fastapi.responses import HTMLResponse
-    cals = _load_calendars()
+    all_cals = _load_calendars()
+    # Only show non-archived calendars on the landing page
+    cals = [c for c in all_cals if not c.get("archived", False)]
     events = _load_events()
     today_iso = _today_iso()
     today_events = _events_overlapping_date(today_iso)
@@ -822,7 +845,7 @@ function badgeFor(status) {{
 
 // ── Calendar List ──────────────────────────────────────────────
 async function loadCalendars() {{
-  calendars = await api('/api/calendars');
+  calendars = await api('/api/calendars');  // server already excludes archived
   renderCalendars();
   // Refresh stats
   const h = await api('/api/health');
@@ -1088,9 +1111,17 @@ renderCalendars();
 # ── Routes: calendars ────────────────────────────────────────────────────────
 
 @app.get("/api/calendars")
-def list_calendars():
+def list_calendars(include_archived: bool = False):
+    """List all calendars.
+
+    By default, archived (deprecated/hidden) calendars are excluded.
+    Pass ``include_archived=true`` to see everything.
+    """
     try:
-        return _load_calendars()
+        cals = _load_calendars()
+        if not include_archived:
+            cals = [c for c in cals if not c.get("archived", False)]
+        return cals
     except Exception as exc:
         log.error("list_calendars: %s: %s", type(exc).__name__, exc)
         raise HTTPException(503, "Storage temporarily unavailable — retry")
@@ -1142,7 +1173,7 @@ def delete_calendar(cal_id: str):
 
 @app.put("/api/calendars/{cal_id}")
 def update_calendar(cal_id: str, body: CalendarUpdate):
-    """Rename or recolour a calendar."""
+    """Rename, recolour, or archive/unarchive a calendar."""
     try:
         with _lock:
             cals = _load_calendars()
@@ -1154,6 +1185,8 @@ def update_calendar(cal_id: str, body: CalendarUpdate):
                         c["color"] = body.color
                     if body.description is not None:
                         c["description"] = body.description
+                    if body.archived is not None:
+                        c["archived"] = body.archived
                     _atomic_write(CALENDARS_FILE, cals)
                     return c
         raise HTTPException(404, "Calendar not found")
@@ -1162,6 +1195,18 @@ def update_calendar(cal_id: str, body: CalendarUpdate):
     except Exception as exc:
         log.error("update_calendar(%s): %s: %s", cal_id, type(exc).__name__, exc)
         raise HTTPException(503, "Storage temporarily unavailable — retry")
+
+
+@app.post("/api/calendars/{cal_id}/archive")
+def archive_calendar(cal_id: str):
+    """Mark a calendar as archived (hidden from default listing)."""
+    return update_calendar(cal_id, CalendarUpdate(archived=True))
+
+
+@app.post("/api/calendars/{cal_id}/unarchive")
+def unarchive_calendar(cal_id: str):
+    """Restore an archived calendar to the default listing."""
+    return update_calendar(cal_id, CalendarUpdate(archived=False))
 
 
 @app.get("/api/calendars/{cal_id}/events")

@@ -21,6 +21,7 @@
     "type": "project",
     "project_id": "ai-build-advisor",
     "color": "#f59e0b",
+    "archived": true,
     "created_at": "2026-04-25T16:01:37.973792+00:00"
   },
   {
@@ -49,7 +50,7 @@
   },
   {
     "id": "project-dream-launcher",
-    "name": "Dream Launcher",
+    "name": "Dream",
     "type": "project",
     "project_id": "dream-launcher",
     "color": "#14b8a6",
@@ -57,7 +58,7 @@
   },
   {
     "id": "project-dream",
-    "name": "Dream",
+    "name": "Dream Core",
     "type": "project",
     "project_id": "dream",
     "color": "#f97316",
@@ -93,6 +94,7 @@
     "type": "project",
     "project_id": "lol-build-advisor",
     "color": "#10b981",
+    "archived": true,
     "created_at": "2026-04-25T16:01:38.026217+00:00"
   },
   {
@@ -117,6 +119,7 @@
     "type": "project",
     "project_id": "plc-learning-env",
     "color": "#8b5cf6",
+    "archived": true,
     "created_at": "2026-04-25T16:01:38.043835+00:00"
   },
   {
@@ -144,19 +147,38 @@
     "created_at": "2026-04-25T16:01:38.061816+00:00"
   },
   {
-    "id": "project-proj-x",
-    "name": "proj-x",
-    "type": "project",
-    "project_id": "proj-x",
-    "color": "#10b981",
-    "created_at": "2026-05-03T23:15:00.086051+00:00"
-  },
-  {
     "id": "project-interview-prep",
     "name": "Interview Prep",
     "type": "project",
     "project_id": "interview-prep",
     "color": "#f59e0b",
     "created_at": "2026-05-06T04:57:07.968965+00:00"
+  },
+  {
+    "id": "project-agent-controller",
+    "name": "Agent Controller",
+    "type": "project",
+    "project_id": "agent-controller",
+    "color": "#3b82f6",
+    "description": null,
+    "created_at": "2026-05-11T22:08:21.067906+00:00"
+  },
+  {
+    "id": "project-minecraft-server",
+    "name": "Minecraft Server",
+    "type": "project",
+    "project_id": "minecraft-server",
+    "color": "#10b981",
+    "description": null,
+    "created_at": "2026-05-11T22:08:21.092346+00:00"
+  },
+  {
+    "id": "project-automation-registry",
+    "name": "Automation Registry",
+    "type": "project",
+    "project_id": "automation-registry",
+    "color": "#10b981",
+    "description": null,
+    "created_at": "2026-05-14T01:11:08.752655+00:00"
   }
 ]
