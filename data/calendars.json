@@ -180,5 +180,75 @@
     "color": "#10b981",
     "description": null,
     "created_at": "2026-05-14T01:11:08.752655+00:00"
+  },
+  {
+    "id": "project-proj-x",
+    "name": "proj-x",
+    "type": "project",
+    "project_id": "proj-x",
+    "color": "#f59e0b",
+    "description": null,
+    "archived": false,
+    "created_at": "2026-05-16T20:39:22.781529+00:00"
+  },
+  {
+    "id": "project-proj-a",
+    "name": "proj-a",
+    "type": "project",
+    "project_id": "proj-a",
+    "color": "#ef4444",
+    "description": null,
+    "archived": false,
+    "created_at": "2026-05-16T20:39:24.189930+00:00"
+  },
+  {
+    "id": "project-proj1",
+    "name": "proj1",
+    "type": "project",
+    "project_id": "proj1",
+    "color": "#8b5cf6",
+    "description": null,
+    "archived": false,
+    "created_at": "2026-05-16T20:39:26.576128+00:00"
+  },
+  {
+    "id": "project-proj2",
+    "name": "proj2",
+    "type": "project",
+    "project_id": "proj2",
+    "color": "#ec4899",
+    "description": null,
+    "archived": false,
+    "created_at": "2026-05-16T20:39:27.179261+00:00"
+  },
+  {
+    "id": "project-project-b",
+    "name": "project-b",
+    "type": "project",
+    "project_id": "project-b",
+    "color": "#14b8a6",
+    "description": null,
+    "archived": false,
+    "created_at": "2026-05-16T20:39:29.267260+00:00"
+  },
+  {
+    "id": "project-p1",
+    "name": "p1",
+    "type": "project",
+    "project_id": "p1",
+    "color": "#f97316",
+    "description": null,
+    "archived": false,
+    "created_at": "2026-05-16T20:39:31.526746+00:00"
+  },
+  {
+    "id": "project-project-a",
+    "name": "project-a",
+    "type": "project",
+    "project_id": "project-a",
+    "color": "#6366f1",
+    "description": null,
+    "archived": false,
+    "created_at": "2026-05-16T21:08:16.189988+00:00"
   }
 ]
