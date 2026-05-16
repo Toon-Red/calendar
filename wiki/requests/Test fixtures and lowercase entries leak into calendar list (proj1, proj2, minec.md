@@ -4,7 +4,7 @@ project: [[projects/Dream Calendar]]
 status: assigned
 severity: normal
 value_score: 5
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # Test fixtures and lowercase entries leak into calendar list (proj1, proj2, minecraft-server)
@@ -25,4 +25,4 @@ Actual: project-proj1 / proj1, project-proj2 / proj2, project-minecraft-server /
 
 Impact: Confusing UI; suggests writes to /api/calendars from tests aren't cleaned up.
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

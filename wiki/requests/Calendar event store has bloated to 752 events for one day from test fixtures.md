@@ -4,7 +4,7 @@ project: [[projects/Dream Calendar]]
 status: resolved
 severity: normal
 value_score: 5
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # Calendar event store has bloated to 752 events for one day from test fixtures
@@ -29,4 +29,4 @@ ROOT CAUSE: tests that POST to the live :5041 calendar service instead of monkey
 
 DONE WHEN: Running tests/ end-to-end leaves zero new events on the live calendar; OR the test runner uses a temporary EVENTS_FILE so writes never reach data/events.json.
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

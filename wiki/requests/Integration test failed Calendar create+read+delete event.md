@@ -4,7 +4,7 @@ project: [[projects/Dream Calendar]]
 status: assigned
 severity: high
 value_score: 8
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # Integration test failed: Calendar: create+read+delete event
@@ -27,4 +27,4 @@ Error detail: AssertionError: cleanup delete returned 500 (probe event e936c4ab 
 Severity: high (per SERVICE_SEVERITY)
 Duration: 99ms
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

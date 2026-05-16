@@ -4,7 +4,7 @@ project: [[projects/Dream Calendar]]
 status: resolved
 severity: critical
 value_score: 5
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # Dream Calendar unreachable during EOD UI playtest
@@ -25,4 +25,4 @@ Actual: connection failure — http://127.0.0.1:5041/api/health: <urlopen error 
 
 Auto-detected by EOD UI playtest on 2026-05-03.
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

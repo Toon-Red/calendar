@@ -4,7 +4,7 @@ project: [[projects/Dream Calendar]]
 status: done
 priority: critical
 owner: Ruflow swarm-084a7e3a-800211
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # Calendar UI has no project separation — no tabs for personal vs project calendars
@@ -23,4 +23,4 @@ DONE WHEN:
 
 {'input_tokens': 97, 'output_tokens': 55019, 'cache_read_tokens': 1188597, 'cache_creation_tokens': 65280, 'by_model': {'claude-opus-4-6': {'input_tokens': 97, 'output_tokens': 55019, 'cache_read_tokens': 0, 'cache_creation_tokens': 0}}, 'events': 25, 'est_cost_usd': 0.8256, 'swarm_id': 'swarm-084a7e3a-800211', 'pd_task_id': '084a7e3a', 'billing_mode': 'subscription_quota', 'cost_note': 'est_cost_usd is the per-token API equivalent, NOT a real charge. Tokens consume Claude Code subscription quota.'}
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

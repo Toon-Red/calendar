@@ -4,7 +4,7 @@ project: [[projects/Dream Calendar]]
 status: resolved
 severity: normal
 value_score: 5
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # As a PM, I want per-project timeline views so I can track each project's velocity independently
@@ -29,4 +29,4 @@ HOW: Reuse `_filter_events()` from the today-fix; add weekly bucketing on the re
 
 DONE WHEN: GET /api/calendars/project-dream/timeline?days=14 returns {by_week: [{week_start, scheduled, completed, cancelled, events:[...]}]}.
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

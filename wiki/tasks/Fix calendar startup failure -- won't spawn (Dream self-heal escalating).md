@@ -4,7 +4,7 @@ project: [[projects/Dream Calendar]]
 status: done
 priority: critical
 complexity: M
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # Fix calendar startup failure -- won't spawn (Dream self-heal escalating)
@@ -25,4 +25,4 @@ DONE WHEN: `python calendar/app.py` launches without error AND listens on :5041 
 
 REFERENCE: 2026-05-12 investigation report; the Self-Heal Escalation Discord message originates at dream/orchestrator.py:1041 via dream/self_heal.py:ensure_services.
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

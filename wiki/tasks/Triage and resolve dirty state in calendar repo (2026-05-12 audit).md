@@ -1,14 +1,14 @@
 ---
-tags: [task, todo, infra]
+tags: [task, done, infra]
 project: [[projects/Dream Calendar]]
-status: todo
+status: done
 priority: high
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # Triage and resolve dirty state in calendar repo (2026-05-12 audit)
 
-⬜ **Todo**  ·  `infra`  ·  priority: `high`
+✅ **Done**  ·  `infra`  ·  priority: `high`
 
 **Project:** [[Dream Calendar]]
 
@@ -34,4 +34,8 @@ DONE WHEN:
 
 REFERENCE: user story 9efcf902 captures the operator-facing friction. This task is the implementation.
 
-*Auto-generated 2026-05-16 13:08*
+## Approach
+
+Two scoped commits landed locally (no GitHub remote configured for Toon-Red/calendar -- repo does not exist on GitHub, surface for separate decision): 4323e98 wiki sync (38 files, pure timestamp churn, every file has the auto-gen footer), 5eef710 data update (calendars.json + events.json -- proj-x is real PM data per Preston 2026-05-16, NOT test pollution). Working tree clean.
+
+*Auto-generated 2026-05-16 14:24*

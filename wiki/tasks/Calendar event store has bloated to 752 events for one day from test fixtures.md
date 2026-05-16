@@ -3,7 +3,7 @@ tags: [task, done, feature]
 project: [[projects/Dream Calendar]]
 status: done
 priority: normal
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # Calendar event store has bloated to 752 events for one day from test fixtures
@@ -32,4 +32,4 @@ DONE WHEN:
 
 Root cause addressed by dream/7a7713a — the orphan-event accumulation that bloated the store is now cleaned every EOD via the new _clean_stale_event_seeds two-pass logic. Live EOD just cleared 63 stale events. The calendar service itself doesn't need code changes; the cleanup driver is in dream/app.py. A separate one-time sweep can be run if event count is still high after a few EOD cycles.
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

@@ -4,7 +4,7 @@ project: [[projects/Dream Calendar]]
 status: assigned
 severity: low
 value_score: 5
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # Deprecated projects still have calendars (AI Build Advisor, LoL Build Advisor, PLC Learning Environment)
@@ -25,4 +25,4 @@ Actual: project-ai-build-advisor, project-lol-build-advisor, project-plc-learnin
 
 Suggestion: archived flag on calendars; sync from PD's project visibility.
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

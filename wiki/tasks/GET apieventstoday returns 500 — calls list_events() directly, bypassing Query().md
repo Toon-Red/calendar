@@ -3,7 +3,7 @@ tags: [task, done, feature]
 project: [[projects/Dream Calendar]]
 status: done
 priority: high
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # GET /api/events/today returns 500 — calls list_events() directly, bypassing Query() defaults
@@ -22,4 +22,4 @@ HOW: app.py:392 calls `return list_events(date=_today_iso())`. list_events decla
 DONE WHEN: curl /api/events/today returns 200 + a JSON list (possibly empty); covered by a regression test in tests/test_dream_calendar.py.
 DONE WHEN:
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

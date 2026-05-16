@@ -4,7 +4,7 @@ project: [[projects/Dream Calendar]]
 status: assigned
 severity: normal
 value_score: 5
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # 'Today' summary card on Calendar landing reports 510, doesn't match other views
@@ -25,4 +25,4 @@ Actual: Landing card says 510. Filtering /api/events client-side by new Date().t
 
 Likely cause: TZ + multi-day-event counting differs across components.
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

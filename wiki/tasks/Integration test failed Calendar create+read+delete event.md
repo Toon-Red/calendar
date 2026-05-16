@@ -3,7 +3,7 @@ tags: [task, done, feature]
 project: [[projects/Dream Calendar]]
 status: done
 priority: high
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # Integration test failed: Calendar: create+read+delete event
@@ -26,4 +26,4 @@ Severity: high (per SERVICE_SEVERITY)
 Duration: 62ms
 DONE WHEN:
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

@@ -4,7 +4,7 @@ project: [[projects/Dream Calendar]]
 status: resolved
 severity: high
 value_score: 8
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # Integration test failed: Calendar: list calendars
@@ -27,4 +27,4 @@ Error detail: URLError: <urlopen error [WinError 10048] Only one usage of each s
 Severity: high (per SERVICE_SEVERITY)
 Duration: 0ms
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*

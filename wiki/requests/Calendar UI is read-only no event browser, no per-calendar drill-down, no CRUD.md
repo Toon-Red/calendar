@@ -4,7 +4,7 @@ project: [[projects/Dream Calendar]]
 status: assigned
 severity: normal
 value_score: 5
-updated: 2026-05-16 13:08
+updated: 2026-05-16 14:24
 ---
 
 # Calendar UI is read-only: no event browser, no per-calendar drill-down, no CRUD
@@ -25,4 +25,4 @@ Actual: Landing page is a static three-column table (id / name / type). No links
 
 Impact: Every event-level operation requires curl or hitting Swagger directly.
 
-*Auto-generated 2026-05-16 13:08*
+*Auto-generated 2026-05-16 14:24*
