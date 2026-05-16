@@ -1,16 +1,16 @@
 ---
 tags: [task, done, feature]
-project: [[projects/Calendar]]
+project: [[projects/Dream Calendar]]
 status: done
 priority: critical
-updated: 2026-04-25 23:05
+updated: 2026-05-16 13:08
 ---
 
 # Multi-calendar support: personal, per-project, custom
 
 ✅ **Done**  ·  `feature`  ·  priority: `critical`
 
-**Project:** [[Calendar]]
+**Project:** [[Dream Calendar]]
 
 ## Description
 
@@ -25,4 +25,4 @@ HOW:
 
 DONE WHEN: Each of the 17 Pipeline Dashboard projects has its own calendar. Personal calendar exists. Events can be created on any calendar. Aggregate view shows everything.
 
-*Auto-generated 2026-04-25 23:05*
+*Auto-generated 2026-05-16 13:08*

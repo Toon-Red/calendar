@@ -1,14 +1,14 @@
 ---
-tags: [task, done, infra]
+tags: [task, done, feature]
 project: [[projects/Dream Calendar]]
 status: done
-priority: low
+priority: normal
 updated: 2026-05-16 13:08
 ---
 
-# WEBHOOK TEST 2
+# Dream Calendar unreachable during EOD UI playtest
 
-✅ **Done**  ·  `infra`  ·  priority: `low`
+✅ **Done**  ·  `feature`  ·  priority: `normal`
 
 **Project:** [[Dream Calendar]]
 

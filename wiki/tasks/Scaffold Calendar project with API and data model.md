@@ -1,17 +1,17 @@
 ---
 tags: [task, done, feature]
-project: [[projects/Calendar]]
+project: [[projects/Dream Calendar]]
 status: done
 priority: high
 owner: Claude
-updated: 2026-04-25 23:05
+updated: 2026-05-16 13:08
 ---
 
 # Scaffold Calendar project with API and data model
 
 ✅ **Done**  ·  `feature`  ·  priority: `high`  ·  owner: `Claude`
 
-**Project:** [[Calendar]]
+**Project:** [[Dream Calendar]]
 
 ## Description
 
@@ -19,4 +19,4 @@ WHAT: Create Calendar FastAPI app with schedule CRUD, per-project views, and API
 HOW: FastAPI on port 5040, events model with project_id/title/start/end/recurring, REST endpoints.
 DONE WHEN: Calendar API serves schedule data, events can be created/queried per project.
 
-*Auto-generated 2026-04-25 23:05*
+*Auto-generated 2026-05-16 13:08*

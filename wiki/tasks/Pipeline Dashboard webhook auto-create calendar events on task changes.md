@@ -1,16 +1,16 @@
 ---
 tags: [task, done, feature]
-project: [[projects/Calendar]]
+project: [[projects/Dream Calendar]]
 status: done
 priority: high
-updated: 2026-04-25 23:05
+updated: 2026-05-16 13:08
 ---
 
 # Pipeline Dashboard webhook: auto-create calendar events on task changes
 
 ✅ **Done**  ·  `feature`  ·  priority: `high`
 
-**Project:** [[Calendar]]
+**Project:** [[Dream Calendar]]
 
 ## Description
 
@@ -24,4 +24,4 @@ HOW:
 
 DONE WHEN: Create a task in Pipeline Dashboard, see it appear on the project's calendar automatically. Complete it, see it marked done on the calendar.
 
-*Auto-generated 2026-04-25 23:05*
+*Auto-generated 2026-05-16 13:08*

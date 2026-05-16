@@ -1,2 +1,13 @@
 CLAUDE.md
+CLAUDE.md.pre-swarm.bak
 __pycache__/
+
+# Agent infrastructure (not project source)
+.claude-flow/
+.claude/
+.hive-mind/
+.swarm/
+ruvector.db
+
+# Runtime data
+data/events_archive.jsonl
