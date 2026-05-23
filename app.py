@@ -295,6 +295,10 @@ class EventCreate(BaseModel):
     description: Optional[str] = None
     recurring: Optional[str] = None
     trigger_automation: bool = False
+    # 994deef5: optional orchestration trigger. When present, the
+    # calendar scheduler treats this event as a scheduled job. See
+    # scheduler.py for the shape contract + fire rules.
+    orchestration: Optional[dict] = None
 
 
 class EventUpdate(BaseModel):
@@ -306,6 +310,7 @@ class EventUpdate(BaseModel):
     category: Optional[str] = None
     description: Optional[str] = None
     recurring: Optional[str] = None
+    orchestration: Optional[dict] = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1564,6 +1569,71 @@ def upcoming_events(hours: int = 24, trigger_automation: Optional[bool] = None):
 @app.get("/api/projects/{project_id}/events")
 def project_events(project_id: str, from_date: Optional[str] = None, to_date: Optional[str] = None):
     return list_events(project_id=project_id, from_date=from_date, to=to_date)
+
+
+# ── 994deef5: timeline + orchestration APIs ────────────────────────────────
+
+@app.get("/api/timeline")
+def timeline(days: int = 7, project: Optional[str] = None):
+    """Return events spanning the next ``days`` days, optionally filtered
+    by project. Includes orchestration events. Sorted by start ascending.
+    """
+    try:
+        events = _load_events()
+    except Exception as exc:
+        log.error("timeline: %s: %s", type(exc).__name__, exc)
+        raise HTTPException(503, "Storage temporarily unavailable -- retry")
+    if days < 0:
+        days = 0
+    today = date.today()
+    horizon = today + timedelta(days=days)
+    out: list[dict] = []
+    for ev in events:
+        start = ev.get("start") or ""
+        if not start:
+            continue
+        try:
+            ev_date = date.fromisoformat(start[:10])
+        except ValueError:
+            continue
+        if ev_date < today or ev_date > horizon:
+            continue
+        if project and ev.get("project_id") != project:
+            continue
+        out.append(ev)
+    out.sort(key=lambda e: (str(e.get("start") or ""), str(e.get("id") or "")))
+    return out
+
+
+@app.post("/api/orchestrations/{event_id}/run-now")
+def orchestration_run_now(event_id: str):
+    """Manual trigger for an orchestration event. Respects in-flight
+    idempotency: returns 409 if a run is already in progress. Otherwise
+    fires synchronously and returns the run record."""
+    import scheduler as sched
+    events = _load_events()
+    event = next((e for e in events if e.get("id") == event_id), None)
+    if event is None:
+        raise HTTPException(404, f"event {event_id!r} not found")
+    orch = sched.event_orchestration(event)
+    if orch is None:
+        raise HTTPException(
+            400, f"event {event_id!r} has no orchestration block; not triggerable")
+    if sched._in_flight(event_id):
+        raise HTTPException(
+            409, f"orchestration {event_id!r} already in-flight")
+    record = sched.fire(orch, event_id)
+    return record.to_dict()
+
+
+@app.get("/api/orchestrations/{event_id}/runs")
+def orchestration_runs(event_id: str, limit: int = 50):
+    """Return the most-recent ``limit`` runs for the given event,
+    newest-first."""
+    import scheduler as sched
+    runs = sched.runs_for_event(event_id)
+    runs.sort(key=lambda r: r.get("started_at", ""), reverse=True)
+    return runs[:max(0, limit)]
 
 
 # ── Entrypoint ───────────────────────────────────────────────────────────────
