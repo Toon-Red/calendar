@@ -163749,7 +163749,7 @@
       "max_runs_per_day": 1
     },
     "created_at": "2026-05-23T13:23:37.408172+00:00",
-    "updated_at": "2026-05-23T13:23:49.801575+00:00"
+    "updated_at": "2026-05-23T13:43:18.119331+00:00"
   },
   {
     "id": "sod-daily",
@@ -163772,6 +163772,29 @@
       "max_runs_per_day": 1
     },
     "created_at": "2026-05-23T13:23:37.408172+00:00",
-    "updated_at": "2026-05-23T13:23:49.801575+00:00"
+    "updated_at": "2026-05-23T13:43:18.119331+00:00"
+  },
+  {
+    "id": "wiki-health-hourly",
+    "calendar_id": "personal",
+    "title": "Wiki Health Audit",
+    "start": "2026-05-23",
+    "all_day": true,
+    "status": "scheduled",
+    "source": "5214e749-seed",
+    "category": "milestone",
+    "description": "Hourly recursive wiki audit (5214e749). POSTs to PD's /api/wiki/audit?file_findings=true; new findings auto-file as PD tasks (deduped via sha256 marker in the description). Catch-up disabled -- a missed hour is fine, the next tick covers everything.",
+    "recurring": "hourly",
+    "trigger_automation": true,
+    "orchestration": {
+      "kind": "pd_wiki_health",
+      "target": "pipeline-dashboard",
+      "command": "curl -s -X POST http://localhost:5100/api/wiki/audit?file_findings=true",
+      "start_time": "08:00",
+      "catch_up": false,
+      "max_runs_per_day": 16
+    },
+    "created_at": "2026-05-23T13:43:18.119331+00:00",
+    "updated_at": "2026-05-23T13:43:18.119331+00:00"
   }
 ]

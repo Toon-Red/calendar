@@ -68,6 +68,33 @@ SEEDS = [
             "max_runs_per_day": 1,
         },
     },
+    {
+        "id": "wiki-health-hourly",
+        "calendar_id": "personal",
+        "title": "Wiki Health Audit",
+        "start": date.today().isoformat(),
+        "all_day": True,
+        "status": "scheduled",
+        "source": "5214e749-seed",
+        "category": "milestone",
+        "description": (
+            "Hourly recursive wiki audit (5214e749). POSTs to PD's "
+            "/api/wiki/audit?file_findings=true; new findings auto-file "
+            "as PD tasks (deduped via sha256 marker in the description). "
+            "Catch-up disabled -- a missed hour is fine, the next tick "
+            "covers everything."
+        ),
+        "recurring": "hourly",
+        "trigger_automation": True,
+        "orchestration": {
+            "kind": "pd_wiki_health",
+            "target": "pipeline-dashboard",
+            "command": "curl -s -X POST http://localhost:5100/api/wiki/audit?file_findings=true",
+            "start_time": "08:00",
+            "catch_up": False,
+            "max_runs_per_day": 16,
+        },
+    },
 ]
 
 
