@@ -119,7 +119,8 @@ def start_service(host: str = SERVICE_HOST, port: int = SERVICE_PORT) -> subproc
         else:
             kwargs["start_new_session"] = True
 
-        proc = subprocess.Popen(cmd, **kwargs)
+        from windowless_subprocess import Popen as _wl_popen  # d48d4ddb
+        proc = _wl_popen(cmd, **kwargs)
         log.info("Started PID %d", proc.pid)
         return proc
     except OSError as exc:

@@ -283,7 +283,12 @@ def fire(orchestration: Mapping[str, Any], event_id: str,
 
 
 def _default_runner(command: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    # d48d4ddb: route through windowless wrapper so the calendar
+    # scheduler's per-tick subprocess never flashes a cmd window.
+    # Output is still captured (text=True + capture_output=True);
+    # WINDOWLESS != silent.
+    from windowless_subprocess import run as _wl_run
+    return _wl_run(
         command, shell=True, capture_output=True, text=True, timeout=600,
     )
 
