@@ -154,6 +154,10 @@ def is_synthetic(title: str) -> bool:
 
 def write_atomic(path: Path, data: Any) -> None:
     """Write JSON atomically using a temp file + rename."""
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from test_isolation import assert_safe_persist  # a80ad60d Phase 3
+    assert_safe_persist(path)
     tmp_fd, tmp_path = tempfile.mkstemp(
         dir=path.parent, prefix=path.stem, suffix=".tmp"
     )

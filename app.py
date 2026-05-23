@@ -120,6 +120,8 @@ def _atomic_write(path: Path, data) -> None:
     back-off so brief overlapping reads (or antivirus/indexer scans on large
     event stores) don't surface as 500s.
     """
+    from test_isolation import assert_safe_persist  # a80ad60d Phase 3
+    assert_safe_persist(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
     try:
