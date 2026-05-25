@@ -1648,6 +1648,23 @@ def orchestration_runs(event_id: str, limit: int = 50):
     return runs[:max(0, limit)]
 
 
+@app.get("/api/orchestrations/status")
+def orchestrations_status(limit: int = 5):
+    """Operator visibility endpoint (70d0bb90). Returns every
+    orchestration-enabled event with its config + last ``limit`` runs.
+    Same structured payload as ``scripts/show_orchestrations.py --json``
+    so PD/Dream UIs can consume one stable shape."""
+    # Reuse the CLI's collector for a single source of truth.
+    from pathlib import Path as _Path
+    import sys as _sys
+    _scripts = _Path(__file__).resolve().parent / "scripts"
+    if str(_scripts) not in _sys.path:
+        _sys.path.insert(0, str(_scripts))
+    import show_orchestrations as _sho
+    return _sho.collect(_sho.DEFAULT_EVENTS, _sho.DEFAULT_RUNS_DIR,
+                        limit=max(1, min(int(limit), 50)))
+
+
 # ── Entrypoint ───────────────────────────────────────────────────────────────
 
 def _make_server_socket(host: str, port: int) -> _socket.socket:
