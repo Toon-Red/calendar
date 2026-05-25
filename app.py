@@ -97,7 +97,19 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     global _STARTED_AT
     _STARTED_AT = datetime.now(timezone.utc)
     _bootstrap()
-    yield
+    # 2026-05-25 (SCHEDULER-LIFESPAN-WIRE1): actually start the
+    # scheduler thread. 994deef5 shipped the scheduler module +
+    # orchestration events (eod-daily, sod-daily, wiki-health-hourly)
+    # but never wired start_loop() into the service lifecycle, so
+    # every scheduled orchestration has been silently dormant since.
+    # Evidence: data/orchestration-runs/ dir never created;
+    # pipeline-dashboard EOD last fired 2026-05-23.
+    import scheduler as sched
+    sched.start_loop(load_events=_load_events)
+    try:
+        yield
+    finally:
+        sched.stop_loop()
 
 
 app = FastAPI(title="Dream Calendar", version="0.2.0", lifespan=_lifespan)
